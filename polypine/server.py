@@ -1,5 +1,6 @@
 """Local web app: chart underlying + contract prices, edit strategies, run backtests."""
 
+import math
 import re
 import threading
 from datetime import datetime, timezone
@@ -54,6 +55,17 @@ def _downsample(bars: list[dict], plots: list[dict], trades_t: set[int]) -> tupl
                       "l": min(b["l"] for b in chunk), "c": chunk[-1]["c"], "v": sum(b["v"] for b in chunk)})
         out_p.append({**plots[min(i + k, len(plots)) - 1], "t": chunk[0]["t"]})
     return out_b, out_p, k
+
+
+def _json_safe(v):
+    """NaN/inf are not valid JSON; replace them with null anywhere in a result."""
+    if isinstance(v, float):
+        return None if math.isnan(v) or math.isinf(v) else v
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return v
 
 
 def _check(asset: str | None = None, tf: str | None = None, bar: str | None = None) -> None:
@@ -155,6 +167,6 @@ def create_app(data_root: str = "data", strategies_dir: str = "strategies") -> F
         except Exception as e:  # script errors are user-facing
             raise HTTPException(400, f"{type(e).__name__}: {e}")
         res["bars"], res["plots"], res["bar_factor"] = _downsample(res["bars"], res["plots"], set())
-        return res
+        return _json_safe(res)
 
     return app

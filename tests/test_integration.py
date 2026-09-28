@@ -1,4 +1,5 @@
 """End-to-end: synthetic Parquet store -> Feed -> PyneCore script -> binary contract trades."""
+import json
 import math
 
 import pytest
@@ -38,8 +39,10 @@ def store(tmp_path):
                             "start_ms": start, "end_ms": end, "token_up": "u", "token_down": "d", "tick_size": 0.01,
                             "min_order_size": 5, "fee_rate": 0.07, "fee_exponent": 1, "fee_taker_only": True,
                             "twap_lookback_s": 60, "resolution_source": "", "price_to_beat": None})
-        s.write("resolutions", {"condition_id": cid, "slug": f"m{i}", "asset": "BTC", "tf": "5m", "end_ms": end,
-                                "outcome": "UP" if i % 2 == 0 else "DOWN", "price_to_beat": 100.0, "final_price": 101.0})
+        if i < 3:  # the last window is still unresolved
+            s.write("resolutions", {"condition_id": cid, "slug": f"m{i}", "asset": "BTC", "tf": "5m", "end_ms": end,
+                                    "outcome": "UP" if i % 2 == 0 else "DOWN", "price_to_beat": 100.0,
+                                    "final_price": 101.0})
         for t in range(start, end, 1000):
             for side, bid, ask in (("UP", 0.59, 0.60), ("DOWN", 0.40, 0.41)):
                 s.write("book_ticks", {"ts_ms": t, "condition_id": cid, "asset": "BTC", "tf": "5m", "side": side,
@@ -61,7 +64,9 @@ def test_script_sees_extra_fields_and_trades_each_window(store):
     # secs_left == 120 at the close of the 3rd minute bar of each window -> fill at the next bar open + 1s.
     assert [t["entry_ms"] for t in trades] == [T0 + i * W + 180_000 + 1000 for i in range(4)]
     assert all(t["token"] == "UP" and t["entry_price"] == pytest.approx(0.60) for t in trades)
-    assert [t["exit_price"] for t in trades] == [1.0, 0.0, 1.0, 0.0]
+    assert [t["exit_price"] for t in trades] == [1.0, 0.0, 1.0, None]
+    assert trades[-1]["exit_kind"] == "open"
     per = fee(100, 0.60, 0.07)
-    assert res["stats"]["net_pnl"] == pytest.approx(2 * (100 - 60) - 2 * 60 - 4 * per)
-    assert res["stats"]["settled"] == 4
+    assert res["stats"]["net_pnl"] == pytest.approx(2 * (100 - 60) - 60 - 3 * per)
+    assert res["stats"]["settled"] == 3 and res["stats"]["open"] == 1
+    json.dumps(res, allow_nan=False)  # must be valid JSON for the web API

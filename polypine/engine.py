@@ -62,7 +62,7 @@ class Trade:
     cost: float
     fees: float
     exit_ms: int
-    exit_price: float            # sale price, or 1/0 at settlement
+    exit_price: float | None     # sale price, 1/0 at settlement, None while the market is unresolved
     exit_kind: str               # "sold" | "settled" | "open"
     outcome: str | None
     pnl: float
@@ -155,7 +155,7 @@ class Simulator:
             elif m.get("outcome"):
                 exit_kind, exit_px = "settled", 1.0 if m["outcome"] == side.upper() else 0.0
             else:
-                exit_kind, exit_px = "open", float("nan")
+                exit_kind, exit_px = "open", None  # market not resolved yet
 
             pnl = shares * exit_px - cost - fees if exit_kind != "open" else 0.0
             trades.append(Trade(signal_ms=sig.entry_ms, market=m["slug"], slug_start_ms=m["start_ms"],
