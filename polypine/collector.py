@@ -304,7 +304,33 @@ class Collector:
     def stop(self) -> None:
         self._stop.set()
 
+    def reload_unresolved(self) -> int:
+        """Markets that ended within the resolution give-up window but have no stored resolution, e.g.
+        because the collector restarted before they resolved. Queue them for the resolve loop."""
+        from .datafeed import Feed
+        from .gamma import Market as M
+
+        feed = Feed(self.sink.root)
+        if not feed._has("markets"):
+            return 0
+        keys = {(s.asset, s.tf) for s in self.series}
+        cols = list(M.__dataclass_fields__)
+        rows = feed._dicts(f"select {', '.join(cols)} from markets where outcome is null and end_ms > ? and end_ms < ?",
+                           [now_ms() - RESOLVE_GIVE_UP_S * 1000, now_ms()])
+        n = 0
+        for r in rows:
+            if (r["asset"], r["tf"]) in keys and r["condition_id"] not in self.unresolved:
+                self.unresolved[r["condition_id"]] = M(**r)
+                n += 1
+        return n
+
     async def run(self, duration_s: float | None = None) -> None:
+        try:
+            n = self.reload_unresolved()
+            if n:
+                log.info("re-queued %d markets that ended unresolved before this start", n)
+        except Exception as e:  # never block recording on this
+            log.warning("could not reload unresolved markets: %s", e)
         loops = [self.discovery_loop(), self.sample_loop(), self.resolve_loop(), self.price_to_beat_loop(),
                  self.chainlink_loop(),
                  self.underlying_loop(), self.flush_loop(), self.lag_loop()]

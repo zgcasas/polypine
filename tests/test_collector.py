@@ -31,3 +31,24 @@ def test_handle_book_change_and_trade(tmp_path):
     assert top["best_bid"] == 0.555 and top["best_ask"] == 0.56
     assert not am.books[down].ready
     assert c.stats["trades"] == 1 and sink.pending() == 1
+
+
+def test_restart_requeues_recently_ended_unresolved_markets(tmp_path):
+    import time
+
+    from polypine.gamma import Resolution
+
+    c, am, sink = setup(tmp_path)
+    now = int(time.time() * 1000)
+    base = am.m.to_row()
+    ended = {**base, "condition_id": "ended", "start_ms": now - 600_000, "end_ms": now - 300_000}
+    resolved = {**base, "condition_id": "resolved", "start_ms": now - 600_000, "end_ms": now - 300_000}
+    ancient = {**base, "condition_id": "ancient", "start_ms": now - 10 * 3600_000, "end_ms": now - 9 * 3600_000}
+    future = {**base, "condition_id": "future", "start_ms": now + 60_000, "end_ms": now + 360_000}
+    for r in (ended, resolved, ancient, future):
+        sink.write("markets", r)
+    sink.write("resolutions", Resolution("resolved", "s", "BTC", "5m", resolved["end_ms"], "UP", 1.0, 2.0).to_row())
+    sink.flush()
+    assert c.reload_unresolved() == 1
+    assert list(c.unresolved) == ["ended"]
+    assert c.unresolved["ended"].slug == base["slug"]
