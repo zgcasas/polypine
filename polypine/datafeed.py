@@ -8,6 +8,10 @@ import duckdb
 BAR_SECONDS = {"1s": 1, "5s": 5, "15s": 15, "30s": 30, "1m": 60, "3m": 180, "5m": 300, "15m": 900,
                "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 STALE_MS = 5_000  # a book tick older than this is treated as "no quote"
+# 5m/15m price to beat = Chainlink 60s TWAP ending at the window start (the same value Gamma later
+# publishes as the previous window's finalPrice). Gamma only exposes it after resolution, so for live
+# windows we compute it from the recorded Chainlink stream.
+PTB_TWAP_MS = 60_000
 
 
 def _dates(start_ms: int, end_ms: int) -> list[str]:
@@ -66,9 +70,32 @@ class Feed:
     def markets(self, asset: str, tf: str, start_ms: int, end_ms: int) -> list[dict]:
         if not self._has("markets"):
             return []
-        return self._dicts(
+        rows = self._dicts(
             "select * from markets where asset=? and tf=? and end_ms > ? and start_ms < ? order by start_ms",
             [asset, tf, start_ms, end_ms])
+        missing = [r["start_ms"] for r in rows if r["price_to_beat"] is None and r["tf"] in ("5m", "15m")]
+        if missing:
+            ptb = self.chainlink_price_to_beat(asset, missing)
+            for r in rows:
+                if r["price_to_beat"] is None and r["start_ms"] in ptb:
+                    r["price_to_beat"], r["price_to_beat_source"] = ptb[r["start_ms"]], "chainlink"
+        return rows
+
+    def chainlink_price_to_beat(self, asset: str, starts_ms: list[int]) -> dict[int, float]:
+        """TWAP of recorded Chainlink prices over [start - 60s, start) for each window start. A window
+        needs at least 45 of the 60 seconds recorded, otherwise it is left out."""
+        if not starts_ms or not self._has("chainlink_1s"):
+            return {}
+        lo, hi = min(starts_ms) - PTB_TWAP_MS, max(starts_ms)
+        q = f"""
+            with c as (select distinct on (ts_ms) ts_ms, price from {self._src('chainlink_1s')}
+                       where asset = ? and date in (select unnest(?::date[])) and ts_ms >= ? and ts_ms < ?),
+                 w as (select unnest(?::bigint[]) as start_ms)
+            select w.start_ms, avg(c.price), count(*) from w
+            join c on c.ts_ms >= w.start_ms - {PTB_TWAP_MS} and c.ts_ms < w.start_ms
+            group by 1 having count(*) >= 45"""
+        rows = self.con.execute(q, [asset, _dates(lo, hi), lo, hi, starts_ms]).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def market(self, condition_id: str) -> dict | None:
         if not self._has("markets"):
@@ -127,6 +154,12 @@ class Feed:
                     for k in ("bid", "ask", "ask_size", "ask_depth"):
                         r[f"{side}_{k}"] = None
             out[r["t"]] = r
+        missing = sorted({r["start_ms"] for r in out.values() if r["price_to_beat"] is None})
+        if missing and tf in ("5m", "15m"):
+            ptb = self.chainlink_price_to_beat(asset, missing)
+            for r in out.values():
+                if r["price_to_beat"] is None:
+                    r["price_to_beat"] = ptb.get(r["start_ms"])
         return out
 
     # ---------- chart helpers ----------

@@ -151,8 +151,10 @@ def create_app(data_root: str = "data", strategies_dir: str = "strategies") -> F
             rows = feed.contract_bars(asset, tf, s, e, bar)
             windows = feed.markets(asset, tf, s, e)
         return {"bars": [{"t": r[0], "o": r[1], "h": r[2], "l": r[3], "c": r[4]} for r in rows[-MAX_CHART_BARS:]],
-                "windows": [{k: w[k] for k in ("slug", "start_ms", "end_ms", "outcome", "price_to_beat",
-                                                "final_price")} for w in windows[-2000:]]}
+                "windows": [{**{k: w[k] for k in ("slug", "start_ms", "end_ms", "outcome", "price_to_beat",
+                                                   "final_price")},
+                             "price_to_beat_source": w.get("price_to_beat_source", "polymarket")}
+                            for w in windows[-2000:]]}
 
     @app.post("/api/backtest")
     def backtest(req: BacktestRequest):

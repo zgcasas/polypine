@@ -45,6 +45,10 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("bid_px", pa.list_(pa.float64())), ("bid_sz", pa.list_(pa.float64())),
         ("ask_px", pa.list_(pa.float64())), ("ask_sz", pa.list_(pa.float64())),
     ]),
+    # Chainlink Data Streams prices (the 5m/15m resolution oracle), ~1 update/s per asset.
+    "chainlink_1s": pa.schema([
+        ("ts_ms", pa.int64()), ("asset", pa.string()), ("price", pa.float64()),
+    ]),
     "underlying_1s": pa.schema([
         ("ts_ms", pa.int64()), ("asset", pa.string()),
         ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()), ("close", pa.float64()),

@@ -117,6 +117,12 @@ class GammaClient:
         r.raise_for_status()
         return [parse_market(e, series) for e in r.json() if e.get("markets")]
 
+    async def market(self, slug: str, series: Series) -> Market | None:
+        r = await self._client.get("/events", params={"slug": slug})
+        r.raise_for_status()
+        events = r.json()
+        return parse_market(events[0], series) if events and events[0].get("markets") else None
+
     async def resolution(self, slug: str, series: Series) -> Resolution | None:
         r = await self._client.get("/events", params={"slug": slug})
         r.raise_for_status()

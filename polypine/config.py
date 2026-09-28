@@ -19,6 +19,10 @@ _SERIES_SUFFIX = {"5m": "5m", "15m": "15m", "1h": "hourly", "1d": "daily"}
 # Binance spot symbols used as the underlying proxy (markets resolve on Chainlink).
 BINANCE_SYMBOL = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", "DOGE": "DOGEUSDT", "XRP": "XRPUSDT"}
 
+# Polymarket's public real-time data socket: Chainlink prices used to resolve 5m/15m markets.
+RTDS_URL = "wss://ws-live-data.polymarket.com"
+CHAINLINK_SYMBOL = {"BTC": "btc/usd", "ETH": "eth/usd", "SOL": "sol/usd", "DOGE": "doge/usd", "XRP": "xrp/usd"}
+
 GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 BINANCE_URL = "https://data-api.binance.vision"

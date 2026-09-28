@@ -34,6 +34,9 @@
   .pane { position: relative; min-height: 0; border-bottom: 1px solid var(--border); }
   .pane .title { position: absolute; top: 4px; left: 8px; z-index: 3; font-size: 11px; color: var(--muted); pointer-events: none; }
   .pane .chart { position: absolute; inset: 0; }
+  .legend { position: absolute; top: 20px; left: 8px; z-index: 3; font: 11px var(--mono); color: var(--text);
+    background: rgba(19,23,34,.82); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px; pointer-events: none; }
+  .legend .ptb { color: var(--warn); }
   aside { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .section { border-bottom: 1px solid var(--border); padding: 8px 10px; }
   .section h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
@@ -76,7 +79,7 @@
 </header>
 <main>
   <section id="charts">
-    <div class="pane"><div class="title" id="priceTitle">Underlying</div><div class="chart" id="cPrice"></div></div>
+    <div class="pane"><div class="title" id="priceTitle">Underlying</div><div class="legend" id="legend"></div><div class="chart" id="cPrice"></div></div>
     <div class="pane"><div class="title">Contract: Up token mid (live window) · green/red bands = resolved Up/Down</div><div class="chart" id="cContract"></div></div>
     <div class="pane"><div class="title">Indicators</div><div class="chart" id="cInd"></div></div>
     <div class="pane"><div class="title">Equity (USDC, after fees)</div><div class="chart" id="cEq"></div></div>
@@ -120,6 +123,11 @@ function mkChart(el, opts = {}) {
 const charts = { price: mkChart($('cPrice')), contract: mkChart($('cContract')),
   ind: mkChart($('cInd'), { leftPriceScale: { visible: true, borderColor: C.border } }), eq: mkChart($('cEq')) };
 const candle = charts.price.addCandlestickSeries({ upColor: C.up, downColor: C.down, wickUpColor: C.up, wickDownColor: C.down, borderVisible: false });
+// Price to beat: one step per market window (dashed amber).
+const ptbLine = charts.price.addLineSeries({ color: C.warn, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
+  lineType: LightweightCharts.LineType.WithSteps, priceLineVisible: false, lastValueVisible: true, title: 'to beat',
+  crosshairMarkerVisible: false });
+let windows = [];
 const contractMid = charts.contract.addLineSeries({ color: C.accent, lineWidth: 1, priceFormat: { type: 'price', precision: 3, minMove: 0.001 },
   autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) });
 const outcomeBands = charts.contract.addHistogramSeries({ priceScaleId: 'bands', priceFormat: { type: 'price' }, base: 0,
@@ -207,7 +215,50 @@ async function loadChart() {
 
 function setCandles(bars) { candle.setData(bars.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c }))); }
 
+function setPriceToBeat(ws) {
+  windows = ws.filter((w) => w.price_to_beat !== null && w.price_to_beat !== undefined).sort((a, b) => a.start_ms - b.start_ms);
+  const pts = [];
+  windows.forEach((w, i) => {
+    pts.push({ time: sec(w.start_ms), value: w.price_to_beat });
+    const next = windows[i + 1];
+    if (!next || next.start_ms > w.end_ms) pts.push({ time: sec(w.end_ms) }); // gap: end the step
+  });
+  const uniq = pts.filter((p, i) => i === 0 || p.time > pts[i - 1].time);
+  ptbLine.setData(uniq);
+  showLegend(null);
+}
+
+function windowAt(tSec) {
+  let lo = 0, hi = windows.length - 1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1, w = windows[m];
+    if (tSec * 1000 < w.start_ms) hi = m - 1; else if (tSec * 1000 >= w.end_ms) lo = m + 1; else return w;
+  }
+  return null;
+}
+
+function showLegend(param) {
+  const el = $('legend');
+  let t = param && param.time, close = null;
+  if (param && param.seriesData) { const d = param.seriesData.get(candle); close = d ? (d.close ?? d.value) : null; }
+  const w = t ? windowAt(t) : windows[windows.length - 1];
+  if (!w) { el.textContent = windows.length ? '' : 'No price to beat for this range'; return; }
+  const hm = (ms) => new Date(ms).toISOString().slice(11, 16);
+  const px = (v) => Number(v).toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 5 : 2 });
+  let html = `${$('tf').value} window ${hm(w.start_ms)}–${hm(w.end_ms)} UTC · <span class="ptb">price to beat ${px(w.price_to_beat)}${w.price_to_beat_source === 'chainlink'
+    ? ' <span title="Chainlink 60s TWAP before the window start, from our recording; Polymarket publishes the official value after resolution">(est.)</span>' : ''}</span>`;
+  if (close !== null) {
+    const bps = (close / w.price_to_beat - 1) * 1e4;
+    html += ` · Binance close ${px(close)} <span class="${bps >= 0 ? 'pos' : 'neg'}">(${bps >= 0 ? '+' : ''}${bps.toFixed(1)} bps, ${bps >= 0 ? 'Up' : 'Down'} winning)</span>`;
+  }
+  if (w.final_price !== null && w.final_price !== undefined) html += ` · final ${px(w.final_price)}`;
+  if (w.outcome) html += ` · <span class="${w.outcome === 'UP' ? 'pos' : 'neg'}">${w.outcome}</span>`;
+  el.innerHTML = html;
+}
+charts.price.subscribeCrosshairMove((param) => showLegend(param && param.time ? param : null));
+
 function setContract(con) {
+  setPriceToBeat(con.windows);
   contractMid.setData(con.bars.map((b) => ({ time: sec(b.t), value: b.c })));
   // Outcome band: one bar per window, coloured by resolution (drawn on a hidden 0..1 scale).
   // Shade every bar of a window with its outcome.

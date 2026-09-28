@@ -11,7 +11,8 @@ import orjson
 import websockets
 
 from .book import OrderBook
-from .config import BINANCE_SYMBOL, BINANCE_URL, CLOB_WS_URL, TF_SECONDS, Series, all_series
+from .config import (BINANCE_SYMBOL, BINANCE_URL, CHAINLINK_SYMBOL, CLOB_WS_URL, RTDS_URL, TF_SECONDS, Series,
+                     all_series)
 from .gamma import GammaClient, Market
 from .storage import ParquetSink
 
@@ -21,6 +22,7 @@ DISCOVERY_EVERY = 30
 SAMPLE_EVERY = 1
 L2_EVERY = 10
 RESOLVE_EVERY = 60
+PTB_EVERY = 5
 UNDERLYING_EVERY = 60
 POST_END_GRACE_S = 30
 RESOLVE_GIVE_UP_S = 3 * 3600
@@ -184,6 +186,59 @@ class Collector:
                                                     "bid_px": [p for p, _ in bids], "bid_sz": [s for _, s in bids],
                                                     "ask_px": [p for p, _ in asks], "ask_sz": [s for _, s in asks]})
 
+    # ---------- price to beat ----------
+    async def price_to_beat_loop(self) -> None:
+        """Gamma publishes eventMetadata.priceToBeat only once a window opens, after we discovered the
+        market. Re-fetch live markets until it appears and write an updated markets row (the datafeed
+        keeps the row that has it)."""
+        while not self._stop.is_set():
+            await self._sleep(PTB_EVERY)
+            t = now_ms()
+            for am in list(self.markets.values()):
+                m = am.m
+                # 5m/15m: Gamma only publishes priceToBeat after resolution; it comes from Chainlink instead.
+                if m.tf not in ("1h", "1d") or m.price_to_beat is not None or not (m.start_ms + 2000 <= t < m.end_ms):
+                    continue
+                try:
+                    fresh = await self.gamma.market(m.slug, self.series_by_key[(m.asset, m.tf)])
+                except httpx.HTTPError as e:
+                    log.warning("price to beat fetch failed for %s: %s", m.slug, e)
+                    continue
+                if fresh and fresh.price_to_beat is not None:
+                    m.price_to_beat = fresh.price_to_beat
+                    self.sink.write("markets", m.to_row())
+                    log.info("price to beat %s = %s", m.slug, m.price_to_beat)
+
+    # ---------- chainlink ----------
+    async def chainlink_loop(self) -> None:
+        """Record Chainlink oracle prices from Polymarket's real-time data socket (~1/s per asset)."""
+        by_symbol = {CHAINLINK_SYMBOL[a]: a for a in {s.asset for s in self.series}}
+        backoff = 1
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(RTDS_URL, ping_interval=None, max_size=None) as ws:
+                    await ws.send(json.dumps({"action": "subscribe", "subscriptions": [
+                        {"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}]}))
+                    pinger = asyncio.create_task(self._ping(ws))
+                    try:
+                        backoff = 1
+                        async for raw in ws:
+                            if not raw or raw[0] != "{":
+                                continue
+                            msg = orjson.loads(raw)
+                            p = msg.get("payload") or {}
+                            asset = by_symbol.get(p.get("symbol"))
+                            if asset and msg.get("topic") == "crypto_prices_chainlink" and p.get("value") is not None:
+                                self.sink.write("chainlink_1s", {"ts_ms": int(p["timestamp"]), "asset": asset,
+                                                                 "price": float(p["value"])})
+                                self.stats["chainlink"] = self.stats.get("chainlink", 0) + 1
+                    finally:
+                        pinger.cancel()
+            except (OSError, websockets.WebSocketException) as e:
+                log.warning("chainlink socket dropped (%s); retry in %ss", e, backoff)
+                await self._sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
     # ---------- resolutions ----------
     async def resolve_loop(self) -> None:
         while not self._stop.is_set():
@@ -250,7 +305,8 @@ class Collector:
         self._stop.set()
 
     async def run(self, duration_s: float | None = None) -> None:
-        loops = [self.discovery_loop(), self.sample_loop(), self.resolve_loop(),
+        loops = [self.discovery_loop(), self.sample_loop(), self.resolve_loop(), self.price_to_beat_loop(),
+                 self.chainlink_loop(),
                  self.underlying_loop(), self.flush_loop(), self.lag_loop()]
         tasks = [asyncio.create_task(c) for c in loops]
         try:
