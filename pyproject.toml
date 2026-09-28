@@ -1,0 +1,29 @@
+[project]
+name = "polypine"
+version = "0.1.0"
+description = "Backtest Pine-style strategies on Polymarket crypto Up/Down markets"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "websockets>=13",
+    "pyarrow>=17",
+    "duckdb>=1.1",
+    "orjson>=3.12.0",
+    "pynesys-pynecore>=6.10.3",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+polypine = "polypine.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

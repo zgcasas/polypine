@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PolyPine</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #131722; --panel: #1e222d; --panel-2: #2a2e39; --border: #363a45;
+    --text: #d1d4dc; --muted: #868993; --accent: #2962ff;
+    --up: #26a69a; --down: #ef5350; --warn: #f0b429;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border); }
+  header .brand { font-weight: 700; letter-spacing: .3px; margin-right: 6px; }
+  header .brand span { color: var(--accent); }
+  label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+  select, input, button, textarea { font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; }
+  input[type=number] { width: 72px; }
+  input.wide { width: 170px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 5px 14px; }
+  button:disabled { opacity: .5; cursor: wait; }
+  #status { color: var(--muted); margin-left: auto; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.err { color: var(--down); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: calc(100% - 49px); }
+  #charts { display: grid; grid-template-rows: 3fr 1.4fr 1fr 1fr; min-height: 0; border-right: 1px solid var(--border); }
+  .pane { position: relative; min-height: 0; border-bottom: 1px solid var(--border); }
+  .pane .title { position: absolute; top: 4px; left: 8px; z-index: 3; font-size: 11px; color: var(--muted); pointer-events: none; }
+  .pane .chart { position: absolute; inset: 0; }
+  aside { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .section { border-bottom: 1px solid var(--border); padding: 8px 10px; }
+  .section h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .section h3 .spacer { flex: 1; }
+  #editor { width: 100%; height: 260px; resize: vertical; font: 12px/1.45 var(--mono); tab-size: 4; white-space: pre; }
+  #inputs { width: 100%; font: 12px var(--mono); }
+  #stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 5px 7px; }
+  .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .v { font: 600 14px var(--mono); }
+  .pos { color: var(--up); } .neg { color: var(--down); }
+  #tradesWrap { flex: 1; overflow: auto; min-height: 120px; }
+  table { width: 100%; border-collapse: collapse; font: 11px var(--mono); }
+  th, td { padding: 3px 6px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--panel-2); }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; }
+  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel-2); }
+  .tag { font-size: 10px; padding: 0 4px; border-radius: 3px; }
+  .tag.UP { background: rgba(38,166,154,.18); color: var(--up); } .tag.DOWN { background: rgba(239,83,80,.18); color: var(--down); }
+  .note { color: var(--muted); font-size: 11px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; height: auto; } #charts { height: 900px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Poly<span>Pine</span></div>
+  <label>Asset <select id="asset"></select></label>
+  <label>Market <select id="tf"></select></label>
+  <label>Bar <select id="bar"></select></label>
+  <label>From (UTC) <input id="start" type="datetime-local" class="wide"></label>
+  <label>To (UTC) <input id="end" type="datetime-local" class="wide"></label>
+  <label>Strategy <select id="strategy"></select></label>
+  <label>Stake $ <input id="stake" type="number" value="100" min="1"></label>
+  <label>Latency ms <input id="latency" type="number" value="1000" min="0" step="100"></label>
+  <label>Min secs left <input id="minSecs" type="number" value="0" min="0"></label>
+  <label><input id="roll" type="checkbox"> Roll</label>
+  <button id="load">Load chart</button>
+  <button id="run" class="primary">Run backtest</button>
+  <div id="status"></div>
+</header>
+<main>
+  <section id="charts">
+    <div class="pane"><div class="title" id="priceTitle">Underlying</div><div class="chart" id="cPrice"></div></div>
+    <div class="pane"><div class="title">Contract: Up token mid (live window) · green/red bands = resolved Up/Down</div><div class="chart" id="cContract"></div></div>
+    <div class="pane"><div class="title">Indicators</div><div class="chart" id="cInd"></div></div>
+    <div class="pane"><div class="title">Equity (USDC, after fees)</div><div class="chart" id="cEq"></div></div>
+  </section>
+  <aside>
+    <div class="section">
+      <h3>Script <span class="note" id="scriptName"></span><span class="spacer"></span>
+        <button id="newScript">New</button><button id="save">Save</button></h3>
+      <textarea id="editor" spellcheck="false"></textarea>
+      <h3 style="margin-top:6px">Inputs override (JSON, keys = input titles)</h3>
+      <input id="inputs" value="{}">
+    </div>
+    <div class="section"><h3>Results</h3><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>
+    <div class="section" style="padding-bottom:0"><h3>Contract trades <span class="note" id="tradeCount"></span></h3></div>
+    <div id="tradesWrap"><table><thead><tr>
+      <th>Entry (UTC)</th><th>Token</th><th>Px</th><th>Shares</th><th>Exit</th><th>Exit px</th><th>Fees</th><th>PnL</th>
+    </tr></thead><tbody id="trades"></tbody></table></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const C = { up: css('--up'), down: css('--down'), text: css('--text'), muted: css('--muted'), border: css('--border'),
+            bg: css('--bg'), accent: css('--accent'), warn: css('--warn') };
+const PLOT_COLORS = ['#2962ff', '#f0b429', '#ab47bc', '#26c6da', '#ff7043', '#9ccc65'];
+const sec = (ms) => Math.floor(ms / 1000);
+const fmtT = (ms) => new Date(ms).toISOString().slice(5, 19).replace('T', ' ');
+const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? '–' : Number(v).toFixed(d);
+const pct = (v) => (v === null || v === undefined) ? '–' : (v * 100).toFixed(2) + '%';
+
+function status(msg, err = false) { const s = $('status'); s.textContent = msg; s.className = err ? 'err' : ''; s.title = msg; }
+
+function mkChart(el, opts = {}) {
+  const ch = LightweightCharts.createChart(el, {
+    autoSize: true, layout: { background: { color: C.bg }, textColor: C.muted, fontSize: 11 },
+    grid: { vertLines: { color: '#1f2330' }, horzLines: { color: '#1f2330' } },
+    rightPriceScale: { borderColor: C.border }, timeScale: { borderColor: C.border, timeVisible: true, secondsVisible: true },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal }, ...opts });
+  return ch;
+}
+const charts = { price: mkChart($('cPrice')), contract: mkChart($('cContract')),
+  ind: mkChart($('cInd'), { leftPriceScale: { visible: true, borderColor: C.border } }), eq: mkChart($('cEq')) };
+const candle = charts.price.addCandlestickSeries({ upColor: C.up, downColor: C.down, wickUpColor: C.up, wickDownColor: C.down, borderVisible: false });
+const contractMid = charts.contract.addLineSeries({ color: C.accent, lineWidth: 1, priceFormat: { type: 'price', precision: 3, minMove: 0.001 },
+  autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) });
+const outcomeBands = charts.contract.addHistogramSeries({ priceScaleId: 'bands', priceFormat: { type: 'price' }, base: 0,
+  priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 1 } }) });
+charts.contract.priceScale('bands').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } });
+contractMid.createPriceLine({ price: 0.5, color: C.border, lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
+const equity = charts.eq.addBaselineSeries({ baseValue: { type: 'price', price: 0 }, topLineColor: C.up, bottomLineColor: C.down,
+  topFillColor1: 'rgba(38,166,154,.25)', topFillColor2: 'rgba(38,166,154,.02)', bottomFillColor1: 'rgba(239,83,80,.02)', bottomFillColor2: 'rgba(239,83,80,.25)' });
+let plotSeries = [];
+
+// Keep all panes on the same visible time range.
+let syncing = false;
+Object.values(charts).forEach((src) => src.timeScale().subscribeVisibleTimeRangeChange((r) => {
+  if (syncing || !r) return; syncing = true;
+  Object.values(charts).forEach((dst) => { if (dst !== src) try { dst.timeScale().setVisibleRange(r); } catch (e) {} });
+  syncing = false;
+}));
+
+function toLocalInput(ms) { return new Date(ms).toISOString().slice(0, 16); }
+function params() {
+  return { asset: $('asset').value, tf: $('tf').value, bar: $('bar').value, start: $('start').value, end: $('end').value };
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+let meta = null;
+async function init() {
+  meta = await api('/api/meta');
+  const fill = (sel, items, val) => { $(sel).innerHTML = items.map((x) => `<option>${x}</option>`).join(''); if (val) $(sel).value = val; };
+  fill('asset', meta.assets, 'BTC'); fill('tf', meta.timeframes, '5m'); fill('bar', meta.bars, '1m');
+  const names = await api('/api/strategies');
+  fill('strategy', names, names.includes('late_momentum.py') ? 'late_momentum.py' : names[0]);
+  setDefaultRange();
+  $('asset').onchange = $('tf').onchange = setDefaultRange;
+  $('strategy').onchange = loadScript;
+  await loadScript();
+  await loadChart();
+}
+
+function setDefaultRange() {
+  const cov = meta.coverage.find((c) => c.asset === $('asset').value && c.tf === $('tf').value && c.resolved > 0);
+  if (!cov) { status(`No resolved ${$('asset').value} ${$('tf').value} markets recorded yet`, true); return; }
+  const day = (ms) => ms - (ms % 86400000);
+  const start = day(cov.first_ms) + 13 * 86400000 < cov.last_ms ? day(cov.first_ms) + 13 * 86400000 : cov.first_ms;
+  $('start').value = toLocalInput(start); $('end').value = toLocalInput(Math.min(start + 86400000, cov.last_ms));
+  status(`${cov.markets.toLocaleString()} ${cov.asset} ${cov.tf} markets (${cov.resolved.toLocaleString()} resolved), ${fmtT(cov.first_ms)} → ${fmtT(cov.last_ms)}`);
+}
+
+async function loadScript() {
+  const s = await api(`/api/strategies/${$('strategy').value}`);
+  $('editor').value = s.source; $('scriptName').textContent = s.name;
+}
+
+async function saveScript() {
+  await api(`/api/strategies/${$('strategy').value}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: $('editor').value }) });
+  status(`Saved ${$('strategy').value}`);
+}
+
+async function newScript() {
+  const name = prompt('New script name (e.g. my_strategy.py)'); // eslint-disable-line no-alert
+  if (!name) return;
+  await api(`/api/strategies/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: $('editor').value }) });
+  const names = await api('/api/strategies');
+  $('strategy').innerHTML = names.map((x) => `<option>${x}</option>`).join(''); $('strategy').value = name; $('scriptName').textContent = name;
+}
+
+async function loadChart() {
+  const p = params(); status('Loading…');
+  const q = new URLSearchParams(p);
+  const [bars, con] = await Promise.all([api(`/api/bars?${q}`), api(`/api/contract?${q}`)]);
+  setCandles(bars);
+  setContract(con);
+  $('priceTitle').textContent = `${p.asset}/USDT · Binance · ${p.bar}`;
+  charts.price.timeScale().fitContent();
+  status(`${bars.length.toLocaleString()} bars · ${con.windows.length} ${p.tf} windows`);
+}
+
+function setCandles(bars) { candle.setData(bars.map((b) => ({ time: sec(b.t), open: b.o, high: b.h, low: b.l, close: b.c }))); }
+
+function setContract(con) {
+  contractMid.setData(con.bars.map((b) => ({ time: sec(b.t), value: b.c })));
+  // Outcome band: one bar per window, coloured by resolution (drawn on a hidden 0..1 scale).
+  // Shade every bar of a window with its outcome.
+  const ws = con.windows.filter((w) => w.outcome); let j = 0; const bands = [];
+  con.bars.forEach((b) => {
+    while (j < ws.length && ws[j].end_ms <= b.t) j++;
+    const w = ws[j];
+    if (w && w.start_ms <= b.t) bands.push({ time: sec(b.t), value: 1, color: w.outcome === 'UP' ? 'rgba(38,166,154,.13)' : 'rgba(239,83,80,.13)' });
+  });
+  outcomeBands.setData(bands);
+}
+
+async function runBacktest() {
+  let inputs;
+  try { inputs = JSON.parse($('inputs').value || '{}'); } catch (e) { status('Inputs must be valid JSON', true); return; }
+  $('run').disabled = true; status('Saving script & running backtest…');
+  try {
+    await saveScript();
+    const body = { ...params(), script: $('strategy').value, inputs, stake: +$('stake').value,
+      latency_ms: +$('latency').value, min_secs_left: +$('minSecs').value, roll: $('roll').checked };
+    const t0 = performance.now();
+    const res = await api('/api/backtest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    render(res);
+    const con = await api(`/api/contract?${new URLSearchParams(params())}`);
+    setContract(con);
+    status(`Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${res.signals} Pine signals → ${res.trades.length} contract trades` +
+      (res.bar_factor > 1 ? ` · chart shows ${res.bar_factor}× aggregated bars` : ''));
+  } catch (e) { status(e.message, true); } finally { $('run').disabled = false; }
+}
+
+function render(res) {
+  setCandles(res.bars);
+  // Plots: overlay those on the price's scale, others to the indicator pane.
+  plotSeries.forEach(({ chart, s }) => chart.removeSeries(s)); plotSeries = [];
+  const closes = res.bars.map((b) => b.c).sort((a, b) => a - b); const mid = closes[closes.length >> 1] || 1;
+  const keys = [...new Set(res.plots.flatMap((p) => Object.keys(p)))].filter((k) => k !== 't');
+  keys.forEach((k, i) => {
+    const pts = res.plots.filter((p) => p[k] !== null && p[k] !== undefined).map((p) => ({ time: sec(p.t), value: p[k] }));
+    if (!pts.length) return;
+    const vals = pts.map((p) => p.value).sort((a, b) => a - b); const m = vals[vals.length >> 1];
+    const overlay = Math.abs(m / mid - 1) < 0.2;
+    const chart = overlay ? charts.price : charts.ind;
+    // Indicators of different magnitude get their own axis (alternating right/left).
+    const scale = overlay ? 'right' : (plotSeries.filter((p) => p.chart === charts.ind).length % 2 ? 'left' : 'right');
+    const s = chart.addLineSeries({ color: PLOT_COLORS[i % PLOT_COLORS.length], lineWidth: 1, title: k, priceScaleId: scale,
+      priceLineVisible: false, lastValueVisible: true });
+    s.setData(pts); plotSeries.push({ chart, s });
+  });
+
+  // Markers: entries on price + contract charts, exits on price chart.
+  const tr = res.trades;
+  const markers = [];
+  tr.forEach((t) => {
+    const up = t.token === 'UP';
+    markers.push({ time: sec(t.entry_ms), position: up ? 'belowBar' : 'aboveBar', color: up ? C.up : C.down,
+      shape: up ? 'arrowUp' : 'arrowDown', text: `${t.token} ${t.entry_price.toFixed(2)}` });
+    if (t.exit_kind !== 'open') markers.push({ time: sec(t.exit_ms), position: 'inBar', color: t.pnl >= 0 ? C.up : C.down, shape: 'circle', text: '' });
+  });
+  markers.sort((a, b) => a.time - b.time);
+  const barTimes = new Set(res.bars.map((b) => sec(b.t)));
+  const snap = (m) => { if (barTimes.has(m.time)) return m; const step = res.bars.length > 1 ? sec(res.bars[1].t) - sec(res.bars[0].t) : 60;
+    return { ...m, time: m.time - ((m.time - sec(res.bars[0].t)) % step) }; };
+  candle.setMarkers(markers.map(snap).sort((a, b) => a.time - b.time));
+  contractMid.setMarkers(tr.map((t) => ({ time: sec(t.entry_ms) - (sec(t.entry_ms) % 60), position: t.token === 'UP' ? 'belowBar' : 'aboveBar',
+    color: t.token === 'UP' ? C.up : C.down, shape: 'circle', text: '' })).sort((a, b) => a.time - b.time));
+
+  // Equity curve.
+  let eq = 0; const pts = [];
+  [...tr].filter((t) => t.exit_kind !== 'open').sort((a, b) => a.exit_ms - b.exit_ms).forEach((t) => {
+    eq += t.pnl; const time = sec(t.exit_ms);
+    if (pts.length && pts[pts.length - 1].time === time) pts[pts.length - 1].value = eq; else pts.push({ time, value: eq });
+  });
+  equity.setData(pts);
+
+  renderStats(res.stats); renderTrades(tr, res.skipped);
+  charts.price.timeScale().fitContent();
+}
+
+function renderStats(s) {
+  const cls = (v) => (v === null || v === undefined) ? '' : (v >= 0 ? 'pos' : 'neg');
+  const items = [
+    ['Net PnL', '$' + num(s.net_pnl), cls(s.net_pnl)], ['ROI', pct(s.roi), cls(s.roi)], ['Trades', s.trades, ''],
+    ['Win rate', pct(s.win_rate), ''], ['Avg entry px', num(s.avg_entry_price, 3), ''], ['Edge vs implied', num(s.edge_vs_implied, 4), cls(s.edge_vs_implied)],
+    ['Fees', '$' + num(s.fees), 'neg'], ['Max DD', '$' + num(s.max_drawdown), ''], ['t-stat', num(s.pnl_per_trade_t), cls(s.pnl_per_trade_t)],
+    ['Settled / sold', `${s.settled} / ${s.sold}`, ''], ['Staked', '$' + num(s.staked, 0), ''], ['Skipped', s.skipped, ''],
+  ];
+  $('stats').innerHTML = items.map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join('');
+}
+
+function renderTrades(tr, skipped) {
+  $('tradeCount').textContent = `${tr.length} trades · ${skipped.length} skipped`;
+  const rows = [...tr].reverse().slice(0, 2000).map((t, i) => `<tr data-t="${t.entry_ms}">
+    <td>${fmtT(t.entry_ms)}</td><td><span class="tag ${t.token}">${t.token}</span></td><td>${num(t.entry_price, 3)}</td>
+    <td>${num(t.shares, 1)}</td><td>${t.exit_kind}</td><td>${num(t.exit_price, 2)}</td><td>${num(t.fees)}</td>
+    <td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${num(t.pnl)}</td></tr>`);
+  $('trades').innerHTML = rows.join('');
+}
+
+$('trades').onclick = (e) => {
+  const row = e.target.closest('tr'); if (!row) return;
+  const t = sec(+row.dataset.t);
+  charts.price.timeScale().setVisibleRange({ from: t - 1800, to: t + 900 });
+};
+$('editor').addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') { e.preventDefault(); const el = e.target; const s = el.selectionStart;
+    el.value = el.value.slice(0, s) + '    ' + el.value.slice(el.selectionEnd); el.selectionStart = el.selectionEnd = s + 4; }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runBacktest();
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveScript().catch((er) => status(er.message, true)); }
+});
+$('load').onclick = () => loadChart().catch((e) => status(e.message, true));
+$('run').onclick = runBacktest;
+$('save').onclick = () => saveScript().catch((e) => status(e.message, true));
+$('newScript').onclick = () => newScript().catch((e) => status(e.message, true));
+init().catch((e) => status(e.message, true));
+</script>
+</body>
+</html>
