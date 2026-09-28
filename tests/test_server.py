@@ -32,3 +32,20 @@ def test_downsample_keeps_ohlc_semantics():
     assert k == 3 and len(b) == MAX_CHART_BARS
     assert b[0] == {"t": 0, "o": 0, "h": 3, "l": -1, "c": 2.5, "v": 3}
     assert p[0]["x"] == 2  # last value of the bucket
+
+
+def test_chart_endpoints_validate_and_default_dates(tmp_path):
+    c = client(tmp_path)
+    # Empty dates (what the UI sent before any market resolved) default to the last 24h instead of a 500.
+    assert c.get("/api/bars?asset=BTC&tf=5m&bar=1m&start=&end=").status_code == 200
+    assert c.get("/api/bars?asset=BTC&start=nope&end=").status_code == 400
+    assert c.get("/api/bars?asset=BTC&start=2026-04-07&end=2026-04-06").status_code == 400
+    assert c.get("/api/bars?asset=FOO").status_code == 400
+    assert c.get("/api/bars?asset=BTC&bar=7m").status_code == 400
+
+
+def test_empty_store_returns_empty_not_500(tmp_path):
+    c = client(tmp_path)
+    assert c.get("/api/meta").json()["coverage"] == []
+    assert c.get("/api/bars?asset=BTC").json() == []
+    assert c.get("/api/contract?asset=BTC&tf=5m").json() == {"bars": [], "windows": []}

@@ -19,9 +19,27 @@ MAX_CHART_BARS = 20_000
 _lock = threading.Lock()  # DuckDB connection and PyneCore's module state are single-threaded
 
 
-def _ms(s: str) -> int:
-    d = datetime.fromisoformat(s)
+def _ms(s: str | None, default_ms: int | None = None) -> int:
+    """Parse an ISO date/datetime (UTC unless it has an offset). Empty -> default_ms."""
+    if not s:
+        if default_ms is None:
+            raise HTTPException(400, "start and end are required (YYYY-MM-DD or YYYY-MM-DDTHH:MM, UTC)")
+        return default_ms
+    try:
+        d = datetime.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(400, f"invalid date {s!r}: use YYYY-MM-DD or YYYY-MM-DDTHH:MM (UTC)")
     return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+
+
+def _range(start: str | None, end: str | None) -> tuple[int, int]:
+    """Chart range; defaults to the last 24h."""
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    e = _ms(end, now)
+    s = _ms(start, e - 86_400_000)
+    if s >= e:
+        raise HTTPException(400, "start must be before end")
+    return s, e
 
 
 def _downsample(bars: list[dict], plots: list[dict], trades_t: set[int]) -> tuple[list[dict], list[dict], int]:
@@ -36,6 +54,15 @@ def _downsample(bars: list[dict], plots: list[dict], trades_t: set[int]) -> tupl
                       "l": min(b["l"] for b in chunk), "c": chunk[-1]["c"], "v": sum(b["v"] for b in chunk)})
         out_p.append({**plots[min(i + k, len(plots)) - 1], "t": chunk[0]["t"]})
     return out_b, out_p, k
+
+
+def _check(asset: str | None = None, tf: str | None = None, bar: str | None = None) -> None:
+    if asset is not None and asset not in ASSETS:
+        raise HTTPException(400, f"asset must be one of {list(ASSETS)}")
+    if tf is not None and tf not in TIMEFRAMES:
+        raise HTTPException(400, f"tf must be one of {list(TIMEFRAMES)}")
+    if bar is not None and bar not in BAR_SECONDS:
+        raise HTTPException(400, f"bar must be one of {list(BAR_SECONDS)}")
 
 
 class BacktestRequest(BaseModel):
@@ -97,24 +124,27 @@ def create_app(data_root: str = "data", strategies_dir: str = "strategies") -> F
         return {"ok": True}
 
     @app.get("/api/bars")
-    def bars(asset: str, start: str, end: str, bar: str = "1m"):
+    def bars(asset: str, start: str = "", end: str = "", bar: str = "1m"):
+        _check(asset=asset, bar=bar)
+        s, e = _range(start, end)
         with _lock:
-            rows = feed.underlying_bars(asset, _ms(start), _ms(end), bar)
+            rows = feed.underlying_bars(asset, s, e, bar)
         return [{"t": r[0], "o": r[1], "h": r[2], "l": r[3], "c": r[4], "v": r[5]} for r in rows[-MAX_CHART_BARS:]]
 
     @app.get("/api/contract")
-    def contract(asset: str, tf: str, start: str, end: str, bar: str = "1m"):
+    def contract(asset: str, tf: str, start: str = "", end: str = "", bar: str = "1m"):
+        _check(asset=asset, tf=tf, bar=bar)
+        s, e = _range(start, end)
         with _lock:
-            rows = feed.contract_bars(asset, tf, _ms(start), _ms(end), bar)
-            windows = feed.markets(asset, tf, _ms(start), _ms(end))
+            rows = feed.contract_bars(asset, tf, s, e, bar)
+            windows = feed.markets(asset, tf, s, e)
         return {"bars": [{"t": r[0], "o": r[1], "h": r[2], "l": r[3], "c": r[4]} for r in rows[-MAX_CHART_BARS:]],
                 "windows": [{k: w[k] for k in ("slug", "start_ms", "end_ms", "outcome", "price_to_beat",
                                                 "final_price")} for w in windows[-2000:]]}
 
     @app.post("/api/backtest")
     def backtest(req: BacktestRequest):
-        if req.bar not in BAR_SECONDS:
-            raise HTTPException(400, f"bar must be one of {list(BAR_SECONDS)}")
+        _check(asset=req.asset, tf=req.tf, bar=req.bar)
         cfg = BacktestConfig(script=str(script_path(req.script)), asset=req.asset, tf=req.tf, bar=req.bar,
                              start_ms=_ms(req.start), end_ms=_ms(req.end), inputs=req.inputs, stake=req.stake,
                              latency_ms=req.latency_ms, min_secs_left=req.min_secs_left,

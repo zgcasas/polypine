@@ -1,0 +1,9 @@
+[Unit]
+Description=Run PolyPine compaction daily
+
+[Timer]
+OnCalendar=*-*-* 00:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=PolyPine collector (Polymarket Up/Down order books, trades, resolutions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=polypine
+WorkingDirectory=/opt/polypine
+ExecStart=/opt/polypine/.venv/bin/polypine --data /opt/polypine/data collect
+# SIGINT makes the collector flush buffered rows before exiting.
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

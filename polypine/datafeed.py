@@ -21,6 +21,7 @@ class Feed:
         self.root = Path(root)
         self.con = duckdb.connect()
         self.con.execute("SET TimeZone = 'UTC'")
+        self._markets_view = False
         self._views()
 
     def _src(self, table: str) -> str:
@@ -28,11 +29,17 @@ class Feed:
                 f"union_by_name=true)")
 
     def _has(self, table: str) -> bool:
-        return any((self.root / table).rglob("*.parquet")) if (self.root / table).exists() else False
+        d = self.root / table
+        found = d.exists() and next(d.rglob("*.parquet"), None) is not None
+        if found and table == "markets" and not self._markets_view:
+            self._views()
+        return found
 
     def _views(self) -> None:
-        if not (self._has("markets")):
+        d = self.root / "markets"
+        if not (d.exists() and next(d.rglob("*.parquet"), None) is not None):
             return
+        self._markets_view = True
         res = (f"select * from {self._src('resolutions')} qualify row_number() over "
                f"(partition by condition_id order by final_price is null) = 1") if self._has("resolutions") else \
             "select null::varchar condition_id, null::varchar outcome, null::double price_to_beat, " \
@@ -50,22 +57,30 @@ class Feed:
     # ---------- catalog ----------
     def coverage(self) -> list[dict]:
         """Per asset/timeframe: market count and the span that has book data."""
+        if not self._has("markets"):
+            return []
         q = """select asset, tf, count(*) markets, count(outcome) resolved,
                       min(start_ms) first_ms, max(end_ms) last_ms from markets group by all order by all"""
         return self._dicts(q)
 
     def markets(self, asset: str, tf: str, start_ms: int, end_ms: int) -> list[dict]:
+        if not self._has("markets"):
+            return []
         return self._dicts(
             "select * from markets where asset=? and tf=? and end_ms > ? and start_ms < ? order by start_ms",
             [asset, tf, start_ms, end_ms])
 
     def market(self, condition_id: str) -> dict | None:
+        if not self._has("markets"):
+            return None
         rows = self._dicts("select * from markets where condition_id = ?", [condition_id])
         return rows[0] if rows else None
 
     # ---------- underlying ----------
     def underlying_bars(self, asset: str, start_ms: int, end_ms: int, bar: str = "1m") -> list[tuple]:
         """(ts_ms, open, high, low, close, volume) bars aggregated from 1s klines, bar-open timestamps."""
+        if not self._has("underlying_1s"):
+            return []
         ms = BAR_SECONDS[bar] * 1000
         q = f"""
             with s as (select distinct on (ts_ms) ts_ms, open, high, low, close, volume
@@ -80,7 +95,7 @@ class Feed:
     def quotes_at(self, asset: str, tf: str, times_ms: list[int]) -> dict[int, dict]:
         """For each timestamp: the market live at that moment (start <= t < end) and the latest top-of-book
         at or before t for its Up and Down tokens. Quotes older than STALE_MS are dropped."""
-        if not times_ms:
+        if not times_ms or not self._has("markets") or not self._has("book_ticks"):
             return {}
         lo, hi = min(times_ms), max(times_ms)
         self.con.execute("create or replace temp table _grid as select unnest(?::bigint[]) as t", [times_ms])
@@ -117,7 +132,7 @@ class Feed:
     # ---------- chart helpers ----------
     def market_ticks(self, condition_id: str) -> list[dict]:
         m = self.market(condition_id)
-        if not m:
+        if not m or not self._has("book_ticks"):
             return []
         q = f"""select ts_ms, side, best_bid, best_ask, bid_size, ask_size from {self._src('book_ticks')}
                 where asset = ? and tf = ? and date in (select unnest(?::date[])) and condition_id = ?
@@ -127,6 +142,8 @@ class Feed:
     def contract_bars(self, asset: str, tf: str, start_ms: int, end_ms: int, bar: str = "1m") -> list[tuple]:
         """OHLC of the Up-token mid for whichever market is live, stitched across windows.
         The series jumps at each window boundary (a new market starts near 0.5)."""
+        if not self._has("markets") or not self._has("book_ticks"):
+            return []
         ms = BAR_SECONDS[bar] * 1000
         q = f"""
             with t as (select b.ts_ms, (b.best_bid + b.best_ask) / 2 mid from {self._src('book_ticks')} b

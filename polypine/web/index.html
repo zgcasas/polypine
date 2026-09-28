@@ -165,12 +165,14 @@ async function init() {
 }
 
 function setDefaultRange() {
-  const cov = meta.coverage.find((c) => c.asset === $('asset').value && c.tf === $('tf').value && c.resolved > 0);
-  if (!cov) { status(`No resolved ${$('asset').value} ${$('tf').value} markets recorded yet`, true); return; }
-  const day = (ms) => ms - (ms % 86400000);
-  const start = day(cov.first_ms) + 13 * 86400000 < cov.last_ms ? day(cov.first_ms) + 13 * 86400000 : cov.first_ms;
-  $('start').value = toLocalInput(start); $('end').value = toLocalInput(Math.min(start + 86400000, cov.last_ms));
-  status(`${cov.markets.toLocaleString()} ${cov.asset} ${cov.tf} markets (${cov.resolved.toLocaleString()} resolved), ${fmtT(cov.first_ms)} → ${fmtT(cov.last_ms)}`);
+  // Default: the last 24h of recorded data (ending now at the latest), whether or not markets have resolved.
+  const cov = meta.coverage.find((c) => c.asset === $('asset').value && c.tf === $('tf').value);
+  const end = Math.min(Date.now(), cov ? cov.last_ms : Date.now());
+  const start = Math.max(cov ? cov.first_ms : 0, end - 86400000);
+  $('start').value = toLocalInput(start); $('end').value = toLocalInput(end);
+  if (!cov) { status(`No ${$('asset').value} ${$('tf').value} markets recorded yet`, true); return; }
+  status(`${cov.markets.toLocaleString()} ${cov.asset} ${cov.tf} markets (${cov.resolved.toLocaleString()} resolved), ${fmtT(cov.first_ms)} → ${fmtT(cov.last_ms)}` +
+    (cov.resolved ? '' : ' · backtest trades stay "open" until markets resolve'));
 }
 
 async function loadScript() {

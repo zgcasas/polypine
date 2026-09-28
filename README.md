@@ -17,8 +17,8 @@ done; done                                          # ~530 MB
 uv run polypine import-kacho
 uv run polypine import-binance --start 2026-03-24 --end 2026-05-18
 
-# 2. Live recording (order books can't be backfilled, so keep this running: tmux / launchd / a VPS)
-uv run polypine collect
+# 2. Live recording runs on the VPS (see "Running the collector on a VPS"); pull its data here:
+scripts/sync-data.sh user@your-vps
 
 # 3. Backtest from the CLI ...
 uv run polypine backtest strategies/late_momentum.py --asset BTC --bar 5s --start 2026-04-06 --end 2026-04-20
@@ -28,9 +28,30 @@ uv run polypine backtest strategies/ema_cross.py --input Fast=5 --input Slow=20 
 uv run polypine serve        # http://127.0.0.1:8765
 
 uv run polypine status       # row counts per table
-uv run polypine compact      # merge small part files (run daily while collecting)
 uv run pytest
 ```
+
+## Running the collector on a VPS
+
+Order books can't be backfilled, so the collector has to run continuously. Any small Linux VPS will do:
+1 vCPU and 1 GB RAM is enough, and disk grows by a few hundred MB per day before compaction. A good
+network helps with the `1013 slow consumer` drops on the busiest market.
+
+```bash
+# on the VPS (Debian/Ubuntu, as root), from a clone of this repo
+sudo ./deploy/install.sh              # /opt/polypine, `polypine` user, systemd units, uv + Python 3.12
+journalctl -u polypine-collector -f   # stats line every minute: live markets, reconnects, slow_consumer
+sudo -u polypine /opt/polypine/.venv/bin/polypine --data /opt/polypine/data status
+
+# after `git pull`, re-run install.sh; it restarts nothing by itself, so:
+sudo systemctl restart polypine-collector
+```
+
+- `polypine-collector.service` restarts on failure and stops with SIGINT, so buffered rows are flushed.
+- `polypine-compact.timer` merges the per-minute part files daily at 00:20 UTC.
+- On your laptop, `scripts/sync-data.sh user@vps` mirrors `/opt/polypine/data` into `./data`. It uses
+  `rsync --delete` because compaction replaces files, but it protects the locally imported
+  `kacho_*` / `binance_*` history. Then backtest locally with `polypine serve` or `polypine backtest`.
 
 ## Writing strategies
 

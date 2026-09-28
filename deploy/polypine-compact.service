@@ -1,0 +1,9 @@
+[Unit]
+Description=PolyPine: merge small Parquet part files
+
+[Service]
+Type=oneshot
+User=polypine
+WorkingDirectory=/opt/polypine
+ExecStart=/opt/polypine/.venv/bin/polypine --data /opt/polypine/data compact
+Nice=10
