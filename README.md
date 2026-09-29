@@ -1,6 +1,6 @@
 # polypine
 
-A TradingView-style backtester for Polymarket crypto **Up or Down** markets (BTC, ETH, SOL, DOGE, XRP ×
+A TradingView-style backtester for Polymarket crypto **Up or Down** markets (BTC, ETH, SOL, DOGE, XRP, HYPE ×
 5m, 15m, 1h, 1d). Write strategies in Pine-style Python (PyneCore), run them on the underlying coin's
 price, and trade the signals as binary contracts using recorded order books, real fees and oracle outcomes.
 
@@ -10,10 +10,10 @@ price, and trade the signals as binary contracts using recorded order books, rea
 uv sync
 
 # 1. Historical data: public 5m dataset (Mar 24 – May 18 2026) + Binance 1s underlying for the same dates
-mkdir -p data/raw/kacho && for c in btc eth sol doge xrp; do for k in markets ticks; do
+mkdir -p data/raw/kacho && for c in btc eth sol doge xrp hype; do for k in markets ticks; do
   curl -L -o data/raw/kacho/${c}_$k.parquet \
     https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/${c}_$k.parquet
-done; done                                          # ~530 MB
+done; done                                          # ~600 MB
 uv run polypine import-kacho
 uv run polypine import-binance --start 2026-03-24 --end 2026-05-18
 
@@ -101,6 +101,21 @@ The market is well calibrated around 50%. Fees plus the spread cost about 5–7%
 longshots are heavily overpriced. Any strategy has to clear those costs. Both example strategies roughly
 break even or lose after fees; they demonstrate the tool and are not an edge.
 
+## Underlying price per coin
+
+| coin | source | why |
+|---|---|---|
+| BTC, ETH, SOL, DOGE, XRP | Binance **spot** 1s klines | their 1h/1d markets settle on Binance spot |
+| HYPE | Binance **USD-M perpetual**, 1s bars built from aggTrades | HYPE 1h/1d settle on the perpetual; spot is ~30x thinner |
+
+Futures has no 1s klines, so `polypine/underlying.py` aggregates trades into 1s bars and fills quiet seconds
+flat at the last close (like spot 1s klines). Configure per coin in `config.UNDERLYING`. Against Chainlink's
+price to beat at window start, spot sits a median of about 2.3 bps away and the HYPE perpetual about 4.9 bps
+(13.7 bps at p99), so Binance is a weaker 5m/15m proxy for HYPE.
+
+HYPE's 5m books are also much wider: a median spread of 9¢ (BTC 1¢, DOGE 6¢) with about 15 shares at the
+best ask, so buying at the ask costs about 5–6¢ over mid before fees.
+
 ## Historical data
 
 - **Kacho CC0 dataset** (Hugging Face `kachoio/polymarket-5-minute-crypto-up-down-markets`): per-second
@@ -123,7 +138,8 @@ break even or lose after fees; they demonstrate the tool and are not an edge.
 | `book_ticks` | 1s per token | best bid/ask, sizes, resting depth within 5¢ |
 | `book_l2` | 10s per token | top 10 levels per side (for depth-aware fills) |
 | `trades` | every print | price, size, taker side, tx hash |
-| `underlying_1s` | 1s per asset | Binance spot klines: the exact oracle for 1h/1d, a proxy for 5m/15m |
+| `underlying_1s` | 1s per asset | Binance 1s bars: the exact oracle for 1h/1d, a proxy for 5m/15m (see below) |
+| `chainlink_1s` | ~1s per asset | Chainlink oracle prices (Polymarket real-time socket): the 5m/15m resolution source |
 
 Imported tables live in the same layout (`kacho_*.parquet`, `binance_*.parquet` files). `polypine/datafeed.py` reads everything through DuckDB and deduplicates markets and resolutions.
 

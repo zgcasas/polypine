@@ -5,9 +5,8 @@ import signal
 import time
 
 import duckdb
-import httpx
 
-from .config import ASSETS, BINANCE_URL, TIMEFRAMES, all_series
+from .config import ASSETS, TIMEFRAMES, all_series
 from .storage import SCHEMAS, ParquetSink, compact
 
 
@@ -27,16 +26,19 @@ def _collect(args) -> None:
 
 
 def _backfill_underlying(args) -> None:
-    from .collector import fetch_klines_1s
+    from .underlying import UnderlyingFetcher
 
     async def main():
         sink = ParquetSink(args.data)
-        end = int(time.time() * 1000) - 1000
+        end = int(time.time() * 1000) - 2000
         start = end - int(args.hours * 3600 * 1000)
-        async with httpx.AsyncClient(base_url=BINANCE_URL, timeout=30) as client:
+        fetcher = UnderlyingFetcher(sink)
+        try:
             for a in args.assets:
-                await fetch_klines_1s(client, sink, a, start, end)
+                await fetcher.fetch(a, start, end)
                 print(f"{a}: {sink.flush()} rows")
+        finally:
+            await fetcher.aclose()
 
     asyncio.run(main())
 

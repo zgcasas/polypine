@@ -11,10 +11,10 @@ import orjson
 import websockets
 
 from .book import OrderBook
-from .config import (BINANCE_SYMBOL, BINANCE_URL, CHAINLINK_SYMBOL, CLOB_WS_URL, RTDS_URL, TF_SECONDS, Series,
-                     all_series)
+from .config import CHAINLINK_SYMBOL, CLOB_WS_URL, RTDS_URL, TF_SECONDS, Series, all_series
 from .gamma import GammaClient, Market
 from .storage import ParquetSink
+from .underlying import UnderlyingFetcher
 
 log = logging.getLogger("polypine.collector")
 
@@ -266,14 +266,18 @@ class Collector:
     async def underlying_loop(self, lookback_s: int = 600) -> None:
         assets = sorted({s.asset for s in self.series})
         since = {a: now_ms() - lookback_s * 1000 for a in assets}
-        async with httpx.AsyncClient(base_url=BINANCE_URL, timeout=20) as client:
+        fetcher = UnderlyingFetcher(self.sink)
+        try:
             while not self._stop.is_set():
                 for a in assets:
                     try:
-                        since[a] = await fetch_klines_1s(client, self.sink, a, since[a], now_ms() - 1000)
+                        # Stop 2s short of now: the latest second may still be receiving trades.
+                        since[a] = await fetcher.fetch(a, since[a], now_ms() - 2000)
                     except httpx.HTTPError as e:
-                        log.warning("binance klines failed for %s: %s", a, e)
+                        log.warning("binance underlying failed for %s: %s", a, e)
                 await self._sleep(UNDERLYING_EVERY)
+        finally:
+            await fetcher.aclose()
 
     # ---------- plumbing ----------
     async def flush_loop(self) -> None:
@@ -352,24 +356,3 @@ class Collector:
             await self.gamma.aclose()
             self.flush()
 
-
-async def fetch_klines_1s(client: httpx.AsyncClient, sink: ParquetSink, asset: str,
-                          start_ms: int, end_ms: int) -> int:
-    """Write Binance 1s klines in [start_ms, end_ms] to the sink. Returns the next start_ms."""
-    cursor = start_ms
-    while cursor <= end_ms:
-        r = await client.get("/api/v3/klines", params={
-            "symbol": BINANCE_SYMBOL[asset], "interval": "1s",
-            "startTime": cursor, "endTime": end_ms, "limit": 1000})
-        r.raise_for_status()
-        rows = r.json()
-        if not rows:
-            break
-        for k in rows:
-            sink.write("underlying_1s", {"ts_ms": int(k[0]), "asset": asset, "open": float(k[1]),
-                                         "high": float(k[2]), "low": float(k[3]), "close": float(k[4]),
-                                         "volume": float(k[5])})
-        cursor = int(rows[-1][0]) + 1000
-        if len(rows) < 1000:
-            break
-    return cursor
