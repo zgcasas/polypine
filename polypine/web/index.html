@@ -104,7 +104,7 @@
       <h3 style="margin-top:6px"><span data-tip='Overrides the script&#39;s input() defaults, keyed by input name or title, e.g. {"min_bps": 10} or {"Fast": 5}. Applies to this run only. Leave {} to use the defaults.'><span class="lt">Inputs override</span></span> (JSON, keys = input names or titles)</h3>
       <input id="inputs" value="{}">
     </div>
-    <div class="section"><h3>Results</h3><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>
+    <div class="section"><h3>Results</h3><div class="note" id="usedInputs" style="margin:-2px 0 6px"></div><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>
     <div class="section" style="padding-bottom:0"><h3>Contract trades <span class="note" id="tradeCount"></span></h3></div>
     <div id="tradesWrap"><table><thead><tr>
       <th>Time (UTC)</th><th>Entry</th><th>Shares</th><th>Exit</th><th>Fees</th><th>PnL</th>
@@ -179,6 +179,7 @@ async function init() {
   fill('strategy', names, names.includes('late_momentum.py') ? 'late_momentum.py' : names[0]);
   setDefaultRange();
   $('asset').onchange = $('tf').onchange = setDefaultRange;
+  applyUrlParams();
   $('strategy').onchange = loadScript;
   await loadScript();
   await loadChart();
@@ -193,6 +194,16 @@ function setDefaultRange() {
   if (!cov) { status(`No ${$('asset').value} ${$('tf').value} markets recorded yet`, true); return; }
   status(`${cov.markets.toLocaleString()} ${cov.asset} ${cov.tf} markets (${cov.resolved.toLocaleString()} resolved), ${fmtT(cov.first_ms)} → ${fmtT(cov.last_ms)}` +
     (cov.resolved ? '' : ' · backtest trades stay "open" until markets resolve'));
+}
+
+// Links from `polypine sweep` prefill the form, e.g. /?script=late_momentum.py&start=...&inputs={"min_bps":0}
+function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  const map = { asset: 'asset', tf: 'tf', bar: 'bar', start: 'start', end: 'end', script: 'strategy', inputs: 'inputs',
+                stake: 'stake', latency: 'latency', minSecs: 'minSecs' };
+  for (const [k, id] of Object.entries(map)) if (q.has(k)) $(id).value = q.get(k);
+  if (q.has('roll')) $('roll').checked = q.get('roll') === '1';
+  if ([...q.keys()].length) status('Settings loaded from the link: click Run backtest to reproduce the run');
 }
 
 async function loadScript() {
@@ -346,6 +357,9 @@ function render(res) {
   equity.setData(pts);
 
   renderStats(res.stats); renderTrades(tr, res.skipped);
+  const c = res.config, when = (ms) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+  $('usedInputs').textContent = `Inputs used: ${Object.entries(res.inputs || {}).map(([k, v]) => `${k}=${v}`).join(' ') || 'none'}`
+    + ` · ${c.asset} ${c.tf} · ${c.bar} bars · ${when(c.start_ms)} → ${when(c.end_ms)} UTC`;
   charts.price.timeScale().fitContent();
 }
 

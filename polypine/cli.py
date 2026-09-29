@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 import asyncio
 import logging
 import signal
@@ -142,6 +143,21 @@ def _sweep(args) -> None:
         print(f"{i:>4}  {vals}  {r['trades']:>6} {win:>6} {px:>6} {r['net_pnl']:>9.2f} {roi:>7} {exb:>9}  "
               f"{'yes' if robust(r, args.min_trades) else 'no'}")
 
+    import json
+    from urllib.parse import urlencode
+
+    def page_link(r):
+        q = {"script": Path(args.script).name, "asset": args.asset, "tf": args.tf, "bar": args.bar,
+             "start": datetime.fromtimestamp(start / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M"),
+             "end": datetime.fromtimestamp(end / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M"),
+             "inputs": json.dumps({n: r[n] for n in names}, separators=(",", ":")), "stake": args.stake,
+             "latency": args.latency_ms, "minSecs": args.min_secs_left}
+        return f"{args.page_url}/?{urlencode(q)}"
+
+    print("\nreproduce on the page (same range and inputs; the page must use the same data as this sweep):")
+    for r in (ok or rows)[:3]:
+        print(f"  {' '.join(f'{n}={r[n]}' for n in names)}: {page_link(r)}")
+
     check = ok[:args.check] if ok else rows[:args.check]
     if check:
         print(f"\nconsistency check: the same parameters on each half of the period (a real edge should hold in both)")
@@ -242,6 +258,7 @@ def main() -> None:
     sw.add_argument("--top", type=int, default=15, help="rows to print")
     sw.add_argument("--check", type=int, default=5, help="top robust combinations to re-test on each half")
     sw.add_argument("--out", help="write every combination's results to this CSV")
+    sw.add_argument("--page-url", default="http://127.0.0.1:8765", help="base URL for the reproduce links")
     sw.set_defaults(func=_sweep)
 
     sv = sub.add_parser("serve", help="run the web app")

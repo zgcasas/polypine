@@ -248,6 +248,23 @@ def resolve_script(path: str) -> Path:
     return p
 
 
+def script_defaults(script: Path) -> dict:
+    """{argument name: default value} for `main(x = input.*(default, ...))` parameters (literal defaults)."""
+    tree = ast.parse(script.read_text())
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            args = node.args.args[len(node.args.args) - len(node.args.defaults):]
+            for arg, default in zip(args, node.args.defaults):
+                if isinstance(default, ast.Call) and default.args and isinstance(default.args[0], ast.Constant):
+                    out[arg.arg] = default.args[0].value
+                elif isinstance(default, ast.Call):
+                    for kw in default.keywords:
+                        if kw.arg == "defval" and isinstance(kw.value, ast.Constant):
+                            out[arg.arg] = kw.value.value
+    return out
+
+
 def script_inputs(script: Path) -> dict[str, str | None]:
     """{argument name: title} for the script's `main(x = input.*(..., title=...))` parameters."""
     tree = ast.parse(script.read_text())
@@ -352,7 +369,8 @@ def run_backtest(cfg: BacktestConfig, feed: Feed | None = None, keep_series: boo
         signals.append(Signal(tr.entry_time, None, 1 if tr.sign > 0 else -1, tr.entry_id))
 
     trades, skipped = Simulator(feed, cfg).run(signals)
-    result = {"config": asdict(cfg), "signals": len(signals), "stats": stats(trades, skipped),
+    effective = {**script_defaults(script), **inputs}  # what this run actually used
+    result = {"config": asdict(cfg), "inputs": effective, "signals": len(signals), "stats": stats(trades, skipped),
               "trades": [asdict(t) for t in trades], "skipped": skipped, "pine_trades": pine_trades}
     if keep_series:
         result["bars"] = [{"t": b.timestamp, "o": b.open, "h": b.high, "l": b.low, "c": b.close, "v": b.volume}

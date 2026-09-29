@@ -115,3 +115,12 @@ def test_unknown_input_is_an_error(store):
     assert resolve_inputs(store / "tunable.py", {"Enter at secs left": 5}) == {"secs": 5}
     with pytest.raises(ValueError, match="unknown input 'sec'.*secs \\(Enter at secs left\\)"):
         resolve_inputs(store / "tunable.py", {"sec": 5})
+
+
+def test_result_reports_effective_inputs(store):
+    path = store / "tunable.py"
+    path.write_text(INPUT_SCRIPT.replace("DEFAULT", "120"))
+    cfg = BacktestConfig(script=str(path), asset="BTC", tf="5m", bar="1m", start_ms=T0 - 600_000, end_ms=T0 + 4 * W)
+    assert run_backtest(cfg, Feed(store), keep_series=False)["inputs"] == {"secs": 120}
+    cfg.inputs = {"Enter at secs left": 60}
+    assert run_backtest(cfg, Feed(store), keep_series=False)["inputs"] == {"secs": 60}
