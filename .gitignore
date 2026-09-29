@@ -4,3 +4,6 @@ __pycache__/
 data/
 .pytest_cache/
 logs/
+
+# PyneCore per-script settings; inputs come from the script defaults + per-run overrides instead
+strategies/*.toml

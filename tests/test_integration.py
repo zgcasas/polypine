@@ -70,3 +70,48 @@ def test_script_sees_extra_fields_and_trades_each_window(store):
     assert res["stats"]["net_pnl"] == pytest.approx(2 * (100 - 60) - 60 - 3 * per)
     assert res["stats"]["settled"] == 3 and res["stats"]["open"] == 1
     json.dumps(res, allow_nan=False)  # must be valid JSON for the web API
+
+
+INPUT_SCRIPT = '''"""
+@pyne
+"""
+from pynecore import Series
+from pynecore.lib import script, strategy, na, extra_fields, input
+
+
+@script.strategy("Buy Up at N secs left")
+def main(secs: int = input.int(DEFAULT, title="Enter at secs left")):
+    secs_left: Series[float] = extra_fields["secs_left"]
+    window: Series[float] = extra_fields["window_start"]
+    if strategy.position_size != 0 and window != window[1]:
+        strategy.close_all()
+    if strategy.position_size == 0 and not na(secs_left) and secs_left == secs:
+        strategy.entry("Up", strategy.long)
+'''
+
+
+def test_repeated_runs_in_one_process_use_current_inputs_and_code(store):
+    """Regression: the web server reused the first run's module, so overrides and edited defaults were ignored."""
+    path = store / "tunable.py"
+    cfg = lambda **inputs: BacktestConfig(script=str(path), asset="BTC", tf="5m", bar="1m",
+                                          start_ms=T0 - 600_000, end_ms=T0 + 4 * W, inputs=inputs)
+    feed = Feed(store)
+    first_entry = lambda res: res["trades"][0]["entry_ms"] - T0 - 1000  # ms after window start, minus latency
+
+    path.write_text(INPUT_SCRIPT.replace("DEFAULT", "120"))
+    assert first_entry(run_backtest(cfg(), feed)) == 180_000             # default: 120s left
+    assert first_entry(run_backtest(cfg(secs=60), feed)) == 240_000      # override by name
+    assert first_entry(run_backtest(cfg(**{"Enter at secs left": 240}), feed)) == 60_000  # by title
+    assert first_entry(run_backtest(cfg(), feed)) == 180_000             # overrides don't stick
+    path.write_text(INPUT_SCRIPT.replace("DEFAULT", "180"))
+    assert first_entry(run_backtest(cfg(), feed)) == 120_000             # edited default is picked up
+    assert not path.with_suffix(".toml").exists()
+
+
+def test_unknown_input_is_an_error(store):
+    from polypine.engine import resolve_inputs
+
+    (store / "tunable.py").write_text(INPUT_SCRIPT.replace("DEFAULT", "120"))
+    assert resolve_inputs(store / "tunable.py", {"Enter at secs left": 5}) == {"secs": 5}
+    with pytest.raises(ValueError, match="unknown input 'sec'.*secs \\(Enter at secs left\\)"):
+        resolve_inputs(store / "tunable.py", {"sec": 5})

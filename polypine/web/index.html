@@ -100,7 +100,7 @@
       <h3>Script <span class="note" id="scriptName"></span><span class="spacer"></span>
         <button id="newScript">New</button><button id="save">Save</button></h3>
       <textarea id="editor" spellcheck="false"></textarea>
-      <h3 style="margin-top:6px"><span data-tip='Overrides the script&#39;s input() defaults, keyed by input title, e.g. {"Fast": 5, "Slow": 20}. Leave {} to use the defaults.'><span class="lt">Inputs override</span></span> (JSON, keys = input titles)</h3>
+      <h3 style="margin-top:6px"><span data-tip='Overrides the script&#39;s input() defaults, keyed by input name or title, e.g. {"min_bps": 10} or {"Fast": 5}. Applies to this run only. Leave {} to use the defaults.'><span class="lt">Inputs override</span></span> (JSON, keys = input names or titles)</h3>
       <input id="inputs" value="{}">
     </div>
     <div class="section"><h3>Results</h3><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>

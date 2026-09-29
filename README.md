@@ -59,6 +59,11 @@ Strategies are PyneCore scripts ("Pyne": Python with Pine's bar-by-bar semantics
 `strategies/*.py`. A `.pine` file also works if `PYNESYS_API_KEY` is set: it's compiled through the
 paid pynesys.io compiler (3 free conversions).
 
+**Inputs:** a script's `input.*()` defaults are its baseline. Override them per run from the UI ("Inputs override")
+or the CLI (`--input min_bps=10`), keyed by argument name or title. Overrides apply to that run only; an unknown
+key is an error. Each run re-imports the script, so edits take effect immediately, and PyneCore's per-script
+`.toml` files aren't written.
+
 The script runs on **underlying bars** (`--bar`, 1s…1d). Each bar also carries the state of the
 **Polymarket market live at the bar's close** (`--tf`) as extra fields:
 

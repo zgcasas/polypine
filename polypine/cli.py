@@ -155,7 +155,7 @@ def main() -> None:
     bt.add_argument("--bar", default="1m", help="chart bar the script runs on (1s..1d)")
     bt.add_argument("--start", required=True, help="YYYY-MM-DD[THH:MM]")
     bt.add_argument("--end", required=True)
-    bt.add_argument("--input", action="append", default=[], help="script input override: 'Title=value'")
+    bt.add_argument("--input", action="append", default=[], help="script input override: name=value or 'Title=value', e.g. min_bps=10")
     bt.add_argument("--stake", type=float, default=100.0)
     bt.add_argument("--latency-ms", type=int, default=1000)
     bt.add_argument("--min-secs-left", type=int, default=0)

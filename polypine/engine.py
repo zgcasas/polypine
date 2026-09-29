@@ -12,13 +12,21 @@ Pipeline
      $1/$0 on the oracle outcome. Polymarket's taker fee applies to every fill.
 """
 
+import ast
+import importlib
+import importlib.util
 import math
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import TF_SECONDS
 from .datafeed import BAR_SECONDS, Feed
+
+# PyneCore writes input values into a <script>.toml next to the script (and reads them back, overriding the
+# script's defaults). Per-run overrides would then stick forever, so don't let backtests write it.
+os.environ.setdefault("PYNE_SAVE_SCRIPT_TOML", "0")
 
 EXTRA_FIELDS = ("up_bid", "up_ask", "down_bid", "down_ask", "secs_left", "secs_in", "price_to_beat",
                 "window_start")
@@ -221,6 +229,42 @@ def resolve_script(path: str) -> Path:
     return p
 
 
+def script_inputs(script: Path) -> dict[str, str | None]:
+    """{argument name: title} for the script's `main(x = input.*(..., title=...))` parameters."""
+    tree = ast.parse(script.read_text())
+    out: dict[str, str | None] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            args = node.args.args[len(node.args.args) - len(node.args.defaults):]
+            for arg, default in zip(args, node.args.defaults):
+                title = None
+                if isinstance(default, ast.Call):
+                    for kw in default.keywords:
+                        if kw.arg == "title" and isinstance(kw.value, ast.Constant):
+                            title = kw.value.value
+                out[arg.arg] = title
+    return out
+
+
+def resolve_inputs(script: Path, inputs: dict) -> dict:
+    """Map override keys to PyneCore's argument names. Keys may be the argument name (`min_bps`) or the
+    input title ("Min distance from price to beat (bps)"). Unknown keys raise instead of being ignored."""
+    if not inputs:
+        return {}
+    known = script_inputs(script)
+    by_title = {t: a for a, t in known.items() if t}
+    out = {}
+    for k, v in inputs.items():
+        if k in known:
+            out[k] = v
+        elif k in by_title:
+            out[by_title[k]] = v
+        else:
+            names = ", ".join(f"{a} ({t})" if t else a for a, t in known.items()) or "none"
+            raise ValueError(f"unknown input {k!r}; this script's inputs are: {names}")
+    return out
+
+
 def build_bars(feed: Feed, cfg: BacktestConfig):
     """Underlying OHLCV bars with Polymarket extra fields as of each bar's close."""
     from pynecore.types.na import NA
@@ -250,12 +294,21 @@ def run_backtest(cfg: BacktestConfig, feed: Feed | None = None, keep_series: boo
 
     feed = feed or Feed()
     script = resolve_script(cfg.script)
+    inputs = resolve_inputs(script, cfg.inputs)
+    # PyneCore imports the script as a module and evaluates the input() defaults and overrides at import.
+    # Python caches imports, so in a long-running process (the web server) every run after the first would
+    # reuse the first run's code and inputs. Drop the cached module so each run re-imports the script.
+    # Also drop its cached bytecode: CPython only revalidates a .pyc on source mtime (whole seconds) + size,
+    # so an edit like 100 -> 200 saved and run within the same second would run the old code.
+    sys.modules.pop(script.stem, None)
+    Path(importlib.util.cache_from_source(str(script.resolve()))).unlink(missing_ok=True)
+    importlib.invalidate_caches()
     bars = build_bars(feed, cfg)
     if not bars:
         raise ValueError(f"no underlying data for {cfg.asset} in the requested range")
 
     runner = ScriptRunner(script, bars, _syminfo(cfg.asset, cfg.bar), last_bar_index=len(bars) - 1,
-                          last_bar_time=bars[-1].timestamp, inputs=cfg.inputs or None)
+                          last_bar_time=bars[-1].timestamp, inputs=inputs or None)
     signals, plots, pine_trades = [], [], []
     for candle, plot, *rest in runner.run_iter():
         if keep_series:
