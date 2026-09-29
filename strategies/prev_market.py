@@ -5,14 +5,15 @@ from pynecore import Series, Persistent
 from pynecore.lib import script, strategy, input, na, extra_fields
 
 
-@script.strategy("Previous Market", overlay=True)
+@script.strategy("Copy Previous Market", overlay=True)
 def main(
-        min_bps: float = input.float(0.0, title="Previous market up by at least (bps)"),
+        min_bps: float = input.float(0.0, title="Previous market won by at least (bps)"),
         entry_after_secs: int = input.int(5, title="Enter N seconds into the window"),
         max_price: float = input.float(0.99, title="Max contract price"),
 ):
-    """Bet on each window from how the previous market ended: if it went up by at least `min_bps`, buy Up;
-    otherwise buy Down. One bet per window, held to settlement.
+    """Copy the previous market's result when it won by at least `min_bps`: previous market resolved Up by
+    >= min_bps -> buy Up; resolved Down by >= min_bps -> buy Down; a smaller move -> no bet. One bet per
+    market, held to settlement. With min_bps = 0 it bets every market (a move of exactly 0 resolves Up).
 
     The previous market's move is known at the window start: a 5m/15m market's price to beat is the previous
     market's final price, so move = price_to_beat now / price_to_beat of the previous window - 1. Only
@@ -50,11 +51,12 @@ def main(
 
     if not na(prev_bps) and (na(bet_window) or bet_window != cur_window) and not na(secs_in) \
             and secs_in >= entry_after_secs:
-        if prev_bps >= min_bps:
+        if prev_bps >= 0 and prev_bps >= min_bps:  # previous market won Up (final >= price to beat)
             if not na(up_ask) and up_ask <= max_price:
                 strategy.entry("Up", strategy.long)
                 bet_window = cur_window
-        elif not na(down_ask) and down_ask <= max_price:
-            strategy.entry("Down", strategy.short)
-            bet_window = cur_window
+        elif prev_bps < 0 and -prev_bps >= min_bps:  # previous market won Down
+            if not na(down_ask) and down_ask <= max_price:
+                strategy.entry("Down", strategy.short)
+                bet_window = cur_window
     return {"prev_bps": prev_bps}
