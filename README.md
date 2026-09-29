@@ -84,7 +84,7 @@ up_ask: Series[float] = extra_fields["up_ask"]
 **Measure distance with the oracle, not `close`.** `close` is Binance, which can sit several bps from
 Chainlink (4–5 bps on BTC in late September 2026). With a threshold of a few bps, a Binance-based signal
 calls the wrong side and buys 4–10¢ longshots; a few of those paying 20× can make a losing strategy look
-very profitable. See `strategies/late_momentum_oracle.py`, and check "Net excl. best trade" in the results.
+very profitable. See `strategies/late_momentum.py`, and check "Net excl. best trade" in the results.
 
 How Pine orders turn into contract trades (`polypine/engine.py`):
 
