@@ -20,6 +20,17 @@
   header .brand { font-weight: 700; letter-spacing: .3px; margin-right: 6px; }
   header .brand span { color: var(--accent); }
   label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+  /* Tooltips: hover or keyboard focus anywhere on the label (text or control). */
+  [data-tip] { position: relative; }
+  label[data-tip] > .lt { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+  [data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: 0; z-index: 50;
+    width: max-content; max-width: 300px; white-space: normal; padding: 7px 9px; border-radius: 4px;
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text); font: 12px/1.45 -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: left; text-transform: none; letter-spacing: 0;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45); opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .12s ease .15s; }
+  [data-tip]:hover::after, [data-tip]:focus-within::after { opacity: 1; visibility: visible; }
+  [data-tip].tip-left::after { left: auto; right: 0; }
   select, input, button, textarea { font: inherit; color: var(--text); background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; }
   input[type=number] { width: 72px; }
@@ -63,18 +74,18 @@
 <body>
 <header>
   <div class="brand">Poly<span>Pine</span></div>
-  <label>Asset <select id="asset"></select></label>
-  <label>Market <select id="tf"></select></label>
-  <label>Bar <select id="bar"></select></label>
-  <label>From (UTC) <input id="start" type="datetime-local" class="wide"></label>
-  <label>To (UTC) <input id="end" type="datetime-local" class="wide"></label>
-  <label>Strategy <select id="strategy"></select></label>
-  <label>Stake $ <input id="stake" type="number" value="100" min="1"></label>
-  <label>Latency ms <input id="latency" type="number" value="1000" min="0" step="100"></label>
-  <label>Min secs left <input id="minSecs" type="number" value="0" min="0"></label>
-  <label><input id="roll" type="checkbox"> Roll</label>
-  <button id="load">Load chart</button>
-  <button id="run" class="primary">Run backtest</button>
+  <label data-tip="Coin to chart and backtest. Price bars come from Binance: spot for most coins, the USD-M perpetual for HYPE (its 1h/1d markets settle there)."><span class="lt">Asset</span> <select id="asset"></select></label>
+  <label data-tip="Polymarket market to trade: the 5m, 15m, 1h or 1d Up/Down windows. Signals buy the Up or Down token of the window live at the fill."><span class="lt">Market</span> <select id="tf"></select></label>
+  <label data-tip="Candle size the strategy runs on, independent of the market (e.g. 1m bars trading 5m markets). Smaller bars show more detail but backtest more slowly."><span class="lt">Bar</span> <select id="bar"></select></label>
+  <label data-tip="Start of the chart and backtest range, in UTC."><span class="lt">From (UTC)</span> <input id="start" type="datetime-local" class="wide"></label>
+  <label data-tip="End of the chart and backtest range, in UTC."><span class="lt">To (UTC)</span> <input id="end" type="datetime-local" class="wide"></label>
+  <label data-tip="Pyne script from the strategies/ folder. Edit it on the right; Run backtest saves it first."><span class="lt">Strategy</span> <select id="strategy"></select></label>
+  <label data-tip="USDC spent per entry. Beyond the size at the best ask, the rest fills one tick worse, up to the book depth within 5¢; anything more is left unfilled."><span class="lt">Stake $</span> <input id="stake" type="number" value="100" min="1"></label>
+  <label data-tip="Delay from the Pine fill (the next bar&#x27;s open) to your order reaching the book. The recorded ask (entry) or bid (exit) at that moment is used."><span class="lt">Latency ms</span> <input id="latency" type="number" value="1000" min="0" step="100"></label>
+  <label data-tip="Skip entries when fewer than this many seconds remain in the window. 0 = never skip."><span class="lt">Min secs left</span> <input id="minSecs" type="number" value="0" min="0"></label>
+  <label data-tip="Off: a signal trades only the window live when it fires, and that bet settles at the window end even if Pine is still in position. On: while Pine stays in position, re-enter the same side at the start of every new window; the last bet is sold at the bid when Pine exits."><input id="roll" type="checkbox"> <span class="lt">Roll</span></label>
+  <button id="load" data-tip="Load price and contract data for the range without running the strategy.">Load chart</button>
+  <button id="run" class="primary" data-tip="Save the script and run the backtest (Ctrl/Cmd + Enter in the editor).">Run backtest</button>
   <div id="status"></div>
 </header>
 <main>
@@ -89,7 +100,7 @@
       <h3>Script <span class="note" id="scriptName"></span><span class="spacer"></span>
         <button id="newScript">New</button><button id="save">Save</button></h3>
       <textarea id="editor" spellcheck="false"></textarea>
-      <h3 style="margin-top:6px">Inputs override (JSON, keys = input titles)</h3>
+      <h3 style="margin-top:6px"><span data-tip='Overrides the script&#39;s input() defaults, keyed by input title, e.g. {"Fast": 5, "Slow": 20}. Leave {} to use the defaults.'><span class="lt">Inputs override</span></span> (JSON, keys = input titles)</h3>
       <input id="inputs" value="{}">
     </div>
     <div class="section"><h3>Results</h3><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>
@@ -357,6 +368,11 @@ function renderTrades(tr, skipped) {
   $('trades').innerHTML = rows.join('');
 }
 
+// Open each tooltip toward the side with more room (the toolbar wraps on narrow screens).
+document.querySelectorAll('[data-tip]').forEach((el) => {
+  const place = () => el.classList.toggle('tip-left', el.getBoundingClientRect().left + 310 > window.innerWidth);
+  el.addEventListener('mouseenter', place); el.addEventListener('focusin', place);
+});
 $('trades').onclick = (e) => {
   const row = e.target.closest('tr'); if (!row) return;
   const t = sec(+row.dataset.t);
