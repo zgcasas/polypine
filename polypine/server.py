@@ -108,7 +108,9 @@ def create_app(data_root: str = "data", strategies_dir: str = "strategies") -> F
 
     @app.get("/")
     def index():
-        return FileResponse(WEB / "index.html")
+        # Revalidate on every load (cheap: 304 when unchanged), so a deploy is visible on the next reload
+        # instead of whenever the browser's heuristic cache expires.
+        return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/meta")
     def meta():

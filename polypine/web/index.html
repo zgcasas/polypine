@@ -24,12 +24,13 @@
   [data-tip] { position: relative; }
   label[data-tip] > .lt { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
   [data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: 0; z-index: 50;
-    width: max-content; max-width: 300px; white-space: normal; padding: 7px 9px; border-radius: 4px;
+    width: max-content; max-width: min(300px, calc(100vw - 24px)); white-space: normal; padding: 7px 9px; border-radius: 4px;
     background: #0b0e14; border: 1px solid var(--border); color: var(--text); font: 12px/1.45 -apple-system,
     BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: left; text-transform: none; letter-spacing: 0;
-    box-shadow: 0 6px 18px rgba(0,0,0,.45); opacity: 0; visibility: hidden; pointer-events: none;
-    transition: opacity .12s ease .15s; }
-  [data-tip]:hover::after, [data-tip]:focus-within::after { opacity: 1; visibility: visible; }
+    box-shadow: 0 6px 18px rgba(0,0,0,.45); pointer-events: none;
+    /* display:none, not visibility:hidden: hidden tooltips must not widen the page (horizontal scroll). */
+    display: none; }
+  [data-tip]:hover::after, [data-tip]:focus-within::after { display: block; }
   [data-tip].tip-left::after { left: auto; right: 0; }
   select, input, button, textarea { font: inherit; color: var(--text); background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; }
@@ -61,7 +62,7 @@
   .pos { color: var(--up); } .neg { color: var(--down); }
   #tradesWrap { flex: 1; overflow: auto; min-height: 120px; }
   table { width: 100%; border-collapse: collapse; font: 11px var(--mono); }
-  th, td { padding: 3px 6px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--panel-2); }
+  th, td { padding: 3px 4px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--panel-2); }
   th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
   th:first-child, td:first-child { text-align: left; }
   tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel-2); }
@@ -106,7 +107,7 @@
     <div class="section"><h3>Results</h3><div id="stats"><div class="note">Run a backtest to see results.</div></div></div>
     <div class="section" style="padding-bottom:0"><h3>Contract trades <span class="note" id="tradeCount"></span></h3></div>
     <div id="tradesWrap"><table><thead><tr>
-      <th>Entry (UTC)</th><th>Token</th><th>Px</th><th>Shares</th><th>Exit</th><th>Exit px</th><th>Fees</th><th>PnL</th>
+      <th>Time (UTC)</th><th>Entry</th><th>Shares</th><th>Exit</th><th>Fees</th><th>PnL</th>
     </tr></thead><tbody id="trades"></tbody></table></div>
   </aside>
 </main>
@@ -362,8 +363,8 @@ function renderStats(s) {
 function renderTrades(tr, skipped) {
   $('tradeCount').textContent = `${tr.length} trades · ${skipped.length} skipped`;
   const rows = [...tr].reverse().slice(0, 2000).map((t, i) => `<tr data-t="${t.entry_ms}">
-    <td>${fmtT(t.entry_ms)}</td><td><span class="tag ${t.token}">${t.token}</span></td><td>${num(t.entry_price, 3)}</td>
-    <td>${num(t.shares, 1)}</td><td>${t.exit_kind}</td><td>${num(t.exit_price, 2)}</td><td>${num(t.fees)}</td>
+    <td>${fmtT(t.entry_ms)}</td><td><span class="tag ${t.token}">${t.token}</span> ${num(t.entry_price, 3)}</td>
+    <td>${num(t.shares, 1)}</td><td>${t.exit_kind}${t.exit_kind === 'open' ? '' : ' ' + num(t.exit_price, 2)}</td><td>${num(t.fees)}</td>
     <td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${num(t.pnl)}</td></tr>`);
   $('trades').innerHTML = rows.join('');
 }

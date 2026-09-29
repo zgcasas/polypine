@@ -66,3 +66,8 @@ def test_status_handles_tables_without_timeframe(tmp_path, capsys):
     main()
     out = capsys.readouterr().out
     assert "chainlink_1s" in out and "underlying_1s" in out and "HYPE 1" in out
+
+
+def test_index_is_revalidated_on_every_load(tmp_path):
+    r = client(tmp_path).get("/")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
