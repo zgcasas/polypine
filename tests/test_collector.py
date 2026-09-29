@@ -52,3 +52,16 @@ def test_restart_requeues_recently_ended_unresolved_markets(tmp_path):
     assert c.reload_unresolved() == 1
     assert list(c.unresolved) == ["ended"]
     assert c.unresolved["ended"].slug == base["slug"]
+
+
+def test_flush_logs_and_resets_per_interval_loop_lag(tmp_path, caplog):
+    import logging
+
+    c, _, _ = setup(tmp_path)
+    c.lag = {"max_ms": 2112, "stalls_250ms": 3}
+    with caplog.at_level(logging.INFO, logger="polypine.collector"):
+        c.flush()
+        c.flush()
+    first, second = [r.getMessage() for r in caplog.records if "flushed" in r.getMessage()]
+    assert "max 2112ms, 3 stalls >250ms" in first
+    assert "max 0ms, 0 stalls >250ms" in second  # a one-off stall no longer sticks forever

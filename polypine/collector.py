@@ -59,7 +59,9 @@ class Collector:
         self.gamma = GammaClient()
         self.markets: dict[str, ActiveMarket] = {}  # condition_id -> market
         self.unresolved: dict[str, Market] = {}
-        self.stats = {"ws_msgs": 0, "ticks": 0, "trades": 0, "reconnects": 0, "max_loop_lag_ms": 0}
+        self.stats = {"ws_msgs": 0, "ticks": 0, "trades": 0, "reconnects": 0}
+        # Per flush interval (reset each flush): worst event-loop stall and stalls over 250ms.
+        self.lag = {"max_ms": 0, "stalls_250ms": 0}
         self._stop = asyncio.Event()
 
     # ---------- discovery ----------
@@ -286,18 +288,22 @@ class Collector:
             await asyncio.to_thread(self.flush)
 
     async def lag_loop(self) -> None:
-        """Track worst event-loop stall; stalls this long mean the WS buffers are backing up."""
+        """Track event-loop stalls; long ones let the WS buffers back up (-> 1013 slow consumer)."""
         while not self._stop.is_set():
             t = time.perf_counter()
             await asyncio.sleep(0.1)
-            self.stats["max_loop_lag_ms"] = max(self.stats["max_loop_lag_ms"],
-                                                int((time.perf_counter() - t - 0.1) * 1000))
+            lag = int((time.perf_counter() - t - 0.1) * 1000)
+            self.lag["max_ms"] = max(self.lag["max_ms"], lag)
+            if lag > 250:
+                self.lag["stalls_250ms"] += 1
 
     def flush(self) -> None:
         n = self.sink.flush()
         live = sum(1 for am in self.markets.values() if am.task and not am.task.done())
-        log.info("flushed %d rows | live markets=%d tracked=%d unresolved=%d | %s",
-                 n, live, len(self.markets), len(self.unresolved), self.stats)
+        lag, self.lag = self.lag, {"max_ms": 0, "stalls_250ms": 0}
+        log.info("flushed %d rows | live markets=%d tracked=%d unresolved=%d | loop lag last %ds: max %dms, "
+                 "%d stalls >250ms | totals %s", n, live, len(self.markets), len(self.unresolved),
+                 self.flush_every, lag["max_ms"], lag["stalls_250ms"], self.stats)
 
     async def _sleep(self, s: float) -> None:
         try:

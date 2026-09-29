@@ -175,10 +175,12 @@ qualify row_number() over (partition by condition_id) = 1;
 
 ## Known limits
 
-- The busiest market (BTC 5m, in its last minute) sometimes gets dropped by the server with
-  `1013 slow consumer` (3 times in a 16-minute test). Our event loop stays under 75ms of lag, so the limit
-  is per-connection throughput. The collector reconnects and takes a fresh snapshot within about 1s, and
-  the worst gap seen was one missed 1s sample. It's logged as `slow_consumer` in the stats line.
+- Polymarket drops the busiest connections (BTC 5m/15m) with `1013 slow consumer` about 2–3 times per
+  10 minutes, at any point in the window, while the process stays far from CPU limits. On the VPS
+  this cost about 0.3% of BTC 5m book seconds, in 1–2s gaps, and no other coin was affected. The backtester
+  accepts quotes up to 5s old, so these gaps don't cause skipped entries. The collector reconnects and takes
+  a fresh snapshot. The flush line reports the worst event-loop stall and the number of stalls over 250ms
+  for the last interval, plus cumulative `reconnects` / `slow_consumer` counts.
 - `underlying_1s` starts 10 minutes before the collector does. Use `backfill-underlying` for more history.
 - Backtests on 5s bars run at about 4k bars/s (PyneCore's bar-by-bar interpreter). Two weeks of 5s bars
   takes about a minute; 1m bars are near-instant.
