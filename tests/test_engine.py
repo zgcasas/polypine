@@ -39,13 +39,35 @@ def test_fee_formula_matches_docs():
     assert fee(100, 0.3, 0.07) == pytest.approx(fee(100, 0.7, 0.07))
 
 
+def test_fee_is_rounded_to_5_decimals_like_polymarket():
+    assert fee(1, 0.999, 0.07) == 0.00007
+    assert fee(0.01, 0.999, 0.07) == 0.0  # below the 0.00001 USDC minimum -> no fee
+
+
 def test_fill_buy_walks_one_tick_beyond_best_level():
-    shares, cost = fill_buy(100, 0.50, ask_size=100, depth_5c=1000, tick=0.01)
-    assert cost == pytest.approx(100)
-    assert shares == pytest.approx(100 + 50 / 0.51)
+    fills = fill_buy(100, 0.50, ask_size=100, depth_5c=1000, tick=0.01)
+    assert fills[0] == (100, 0.50)
+    assert fills[1][0] == pytest.approx(50 / 0.51) and fills[1][1] == 0.51
     # Depth caps the fill.
-    shares, cost = fill_buy(100, 0.50, ask_size=10, depth_5c=20, tick=0.01)
-    assert shares == pytest.approx(20) and cost == pytest.approx(10 * 0.5 + 10 * 0.51)
+    fills = fill_buy(100, 0.50, ask_size=10, depth_5c=20, tick=0.01)
+    assert fills == [(10, 0.50), (pytest.approx(10), 0.51)]
+
+
+def test_multi_level_fill_pays_fee_per_level():
+    feed = FakeFeed()
+    orig = feed.quotes_at
+
+    def thin(asset, tf, times):  # only 10 shares at the best ask
+        out = orig(asset, tf, times)
+        for q in out.values():
+            q["up_ask_size"], q["up_ask_depth"] = 10, 1e9
+        return out
+
+    feed.quotes_at = thin
+    (t,), _ = sim(feed).run([Signal(T0 + 10_000, None, +1)])
+    rest = (60 - 10 * 0.60) / 0.61
+    assert t.shares == pytest.approx(10 + rest)
+    assert t.fees == pytest.approx(fee(10, 0.60, 0.07) + fee(rest, 0.61, 0.07))
 
 
 def test_long_held_to_expiry_settles_at_one():
@@ -96,3 +118,20 @@ def test_stats_edge_and_roi():
     assert s["trades"] == 2 and s["win_rate"] == 0.5
     assert s["edge_vs_implied"] == pytest.approx(0.5 - 0.60)
     assert s["roi"] == pytest.approx(s["net_pnl"] / 120)
+
+
+# docs.polymarket.com/trading/fees: taker fee on 100 crypto shares at each price (rounded to cents).
+FEE_TABLE = [(0.01, 0.07), (0.05, 0.33), (0.10, 0.63), (0.15, 0.89), (0.20, 1.12), (0.25, 1.31), (0.30, 1.47),
+             (0.35, 1.59), (0.40, 1.68), (0.45, 1.73), (0.50, 1.75), (0.55, 1.73), (0.60, 1.68), (0.65, 1.59),
+             (0.70, 1.47), (0.75, 1.31), (0.80, 1.12), (0.85, 0.89), (0.90, 0.63), (0.95, 0.33), (0.99, 0.07)]
+
+
+@pytest.mark.parametrize("price,expected", FEE_TABLE)
+def test_fee_matches_polymarket_published_table(price, expected):
+    assert round(fee(100, price, 0.07), 2) == expected
+
+
+def test_fee_exponent_applies_to_price_term():
+    # exponent 2 -> (p(1-p))^2: at p=0.5 that is 0.0625 instead of 0.25
+    assert fee(100, 0.5, 0.07, exponent=2) == pytest.approx(100 * 0.07 * 0.0625)
+    assert fee(100, 0.5, 0.07, exponent=1) == fee(100, 0.5, 0.07)

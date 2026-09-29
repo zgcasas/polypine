@@ -80,7 +80,12 @@ How Pine orders turn into contract trades (`polypine/engine.py`):
 - Pine fills at the next bar's open. The simulator then waits `--latency-ms` (default 1000) and takes the
   recorded best ask. Size beyond the best level fills one tick worse, up to the recorded 5¢ depth.
 - If Pine exits before the window ends, the position is sold at the best bid. Otherwise it settles at
-  $1/$0 on the oracle outcome. The taker fee `shares × 0.07 × p × (1−p)` applies to every fill.
+  $1/$0 on the oracle outcome.
+- Fees follow [Polymarket's fee page](https://docs.polymarket.com/trading/fees): every taker match pays
+  `shares × rate × (p(1−p))^exponent` USDC, rounded to 5 decimals, with `rate`/`exponent` read from each
+  market's Gamma `feeSchedule` (crypto: 0.07 and 1; 0 when `feesEnabled` is false). A fill that spans two
+  price levels pays each at its own price. Makers pay no fee; the 20% maker rebate isn't modelled, because
+  the simulator only takes liquidity. `tests/test_engine.py` checks the published fee table.
 - `--roll`: while Pine stays in position, re-enter every new window. `--min-secs-left` skips late entries.
 - Stats: net PnL after fees, ROI on stake, win rate, `edge_vs_implied` (settled payout minus price paid),
   max drawdown, and the t-stat of per-trade PnL.

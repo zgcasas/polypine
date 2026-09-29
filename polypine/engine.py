@@ -68,14 +68,17 @@ class Trade:
     pnl: float
 
 
-def fee(shares: float, price: float, rate: float) -> float:
-    """Polymarket taker fee in USDC: shares * rate * p * (1 - p)."""
-    return shares * rate * price * (1 - price)
+def fee(shares: float, price: float, rate: float, exponent: float = 1.0) -> float:
+    """Polymarket taker fee in USDC for one match: shares * rate * (p * (1 - p)) ** exponent, rounded to 5
+    decimals (docs.polymarket.com/trading/fees). rate/exponent come from each market's Gamma feeSchedule
+    (crypto: 0.07 and 1). Makers pay nothing; their 20% rebate is paid daily from a shared pool and is not
+    modelled (this simulator only takes liquidity)."""
+    return round(shares * rate * (price * (1 - price)) ** exponent, 5)
 
 
 def fill_buy(stake: float, ask: float, ask_size: float | None, depth_5c: float | None,
-             tick: float) -> tuple[float, float]:
-    """Buy `stake` USDC of shares. Returns (shares, cost).
+             tick: float) -> list[tuple[float, float]]:
+    """Buy `stake` USDC of shares. Returns the fills as [(shares, price), ...].
 
     The recorded book gives the best level size and the total within 5c; the part beyond the best level is
     filled one tick worse, and anything beyond the 5c depth is left unfilled."""
@@ -84,7 +87,7 @@ def fill_buy(stake: float, ask: float, ask_size: float | None, depth_5c: float |
     rest_cap = 0.0 if ask_size is None or depth_5c is None else max(depth_5c - ask_size, 0.0)
     worse = min(ask + tick, 0.99)
     lvl2 = min((stake - lvl1 * ask) / worse, rest_cap) if want > lvl1 else 0.0
-    return lvl1 + lvl2, lvl1 * ask + lvl2 * worse
+    return [(q, px) for q, px in ((lvl1, ask), (lvl2, worse)) if q > 0]
 
 
 class Simulator:
@@ -139,19 +142,21 @@ class Simulator:
                 continue
 
             ask = q[f"{side}_ask"]
-            shares, cost = fill_buy(cfg.stake, ask, q[f"{side}_ask_size"], q[f"{side}_ask_depth"], cfg.tick)
+            fills = fill_buy(cfg.stake, ask, q[f"{side}_ask_size"], q[f"{side}_ask_depth"], cfg.tick)
+            shares, cost = sum(n for n, _ in fills), sum(n * px for n, px in fills)
             if shares <= 0:
                 skipped.append({"signal_ms": sig.entry_ms, "market": m["slug"], "reason": "no depth"})
                 continue
-            rate = m.get("fee_rate") or 0.0
+            rate = m.get("fee_rate") or 0.0  # 0 when the market has fees disabled
+            expo = m.get("fee_exponent") or 1.0
             avg_px = cost / shares
-            fees = fee(shares, avg_px, rate)
+            fees = sum(fee(n, px, rate, expo) for n, px in fills)  # charged per match, at its own price
 
             exit_kind, exit_ms, exit_px = None, m["end_ms"], None
             qo = quotes.get(t_out) if t_out is not None else None
             if qo is not None and qo["condition_id"] == m["condition_id"] and qo[f"{side}_bid"] is not None:
                 exit_kind, exit_ms, exit_px = "sold", t_out, qo[f"{side}_bid"]
-                fees += fee(shares, exit_px, rate)
+                fees += fee(shares, exit_px, rate, expo)
             elif m.get("outcome"):
                 exit_kind, exit_px = "settled", 1.0 if m["outcome"] == side.upper() else 0.0
             else:
