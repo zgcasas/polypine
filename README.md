@@ -106,6 +106,24 @@ How Pine orders turn into contract trades (`polypine/engine.py`):
 - Stats: net PnL after fees, ROI on stake, win rate, `edge_vs_implied` (settled payout minus price paid),
   max drawdown, and the t-stat of per-trade PnL.
 
+## Example strategies
+
+| script | idea |
+|---|---|
+| `ema_cross.py` | EMA crossover on the underlying; long buys Up, short buys Down |
+| `late_momentum.py` | late in a window, buy the side the Chainlink oracle has ahead of the price to beat, if still cheap |
+| `prev_market.py` | at each window start, buy Up if the previous market went up by at least `min_bps`, else Down |
+
+`prev_market.py` uses the fact that a 5m/15m market's price to beat is the previous market's final price, so
+the previous move is known at the window start without lookahead. On Sep 28–29 BTC 5m it bet on 287 of 288
+windows, and every bet matched the previous market's official outcome. The outcome repeated 55.1% of the time,
+which isn't significant on one day (p ≈ 0.09). Sweep it with:
+
+```bash
+uv run polypine sweep strategies/prev_market.py --bar 5s \
+  --grid min_bps=-5:5:1 --grid entry_after_secs=5:60:5 --grid max_price=0.50:0.70:0.05
+```
+
 ## Parameter sweeps
 
 ```bash
