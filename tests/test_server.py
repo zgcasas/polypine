@@ -49,3 +49,20 @@ def test_empty_store_returns_empty_not_500(tmp_path):
     assert c.get("/api/meta").json()["coverage"] == []
     assert c.get("/api/bars?asset=BTC").json() == []
     assert c.get("/api/contract?asset=BTC&tf=5m").json() == {"bars": [], "windows": []}
+
+
+def test_status_handles_tables_without_timeframe(tmp_path, capsys):
+    import sys
+
+    from polypine.cli import main
+    from polypine.storage import ParquetSink
+
+    s = ParquetSink(tmp_path)
+    s.write("chainlink_1s", {"ts_ms": 1790609700000, "asset": "HYPE", "price": 88.1})
+    s.write("underlying_1s", {"ts_ms": 1790609700000, "asset": "HYPE", "open": 1.0, "high": 1.0, "low": 1.0,
+                              "close": 1.0, "volume": 0.0})
+    s.flush()
+    sys.argv = ["polypine", "--data", str(tmp_path), "status"]
+    main()
+    out = capsys.readouterr().out
+    assert "chainlink_1s" in out and "underlying_1s" in out and "HYPE 1" in out

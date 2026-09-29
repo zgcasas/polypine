@@ -108,7 +108,8 @@ def _status(args) -> None:
     for table in SCHEMAS:
         glob = f"{args.data}/{table}/**/*.parquet"
         try:
-            q = f"select asset, {'tf, ' if table != 'underlying_1s' else ''}count(*) n " \
+            has_tf = "tf" in SCHEMAS[table].names
+            q = f"select asset, {'tf, ' if has_tf else ''}count(*) n " \
                 f"from read_parquet('{glob}', hive_partitioning=true, union_by_name=true) group by all order by all"
             rows = duckdb.sql(q).fetchall()
         except duckdb.IOException:
