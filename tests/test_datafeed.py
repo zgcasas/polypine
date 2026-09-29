@@ -28,3 +28,17 @@ def test_live_price_to_beat_is_chainlink_twap_before_start(tmp_path):
     assert ms["live"]["price_to_beat"] == 129.5 and ms["live"]["price_to_beat_source"] == "chainlink"
     assert ms["gappy"]["price_to_beat"] is None
     assert ms["official"]["price_to_beat"] == 123.0 and "price_to_beat_source" not in ms["official"]
+
+
+def test_oracle_at_latest_price_and_60s_twap(tmp_path):
+    s = ParquetSink(tmp_path)
+    for i in range(120):  # prices 0..119, one per second
+        s.write("chainlink_1s", {"ts_ms": T0 + i * 1000, "asset": "BTC", "price": float(i)})
+    s.flush()
+    f = Feed(tmp_path)
+    t = T0 + 119_000
+    got = f.oracle_at("BTC", [t, T0 + 30_000, T0 + 130_000, T0 - 1])
+    assert got[t] == (119.0, sum(range(60, 120)) / 60)   # mean over (t-60s, t]
+    assert got[T0 + 30_000] == (30.0, None)              # only 31s of history: no TWAP yet
+    assert got[T0 + 130_000] == (None, None)             # last price 11s old: stale
+    assert got[T0 - 1] == (None, None)                   # before any data

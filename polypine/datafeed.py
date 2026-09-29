@@ -162,6 +162,28 @@ class Feed:
                     r["price_to_beat"] = ptb.get(r["start_ms"])
         return out
 
+    # ---------- oracle ----------
+    def oracle_at(self, asset: str, times_ms: list[int]) -> dict[int, tuple[float | None, float | None]]:
+        """For each timestamp: (latest Chainlink price at or before t, mean Chainlink price over (t-60s, t]).
+        Chainlink is the 5m/15m settlement oracle, and the 60s mean is the quantity those markets settle on
+        at the window end. (None, None) where no Chainlink data was recorded (e.g. imported history)."""
+        if not times_ms or not self._has("chainlink_1s"):
+            return {}
+        lo, hi = min(times_ms) - 60_000, max(times_ms)
+        self.con.execute("create or replace temp table _og as select unnest(?::bigint[]) as t", [times_ms])
+        q = f"""
+            with c as (select distinct on (ts_ms) ts_ms, price from {self._src('chainlink_1s')}
+                       where asset = ? and date in (select unnest(?::date[])) and ts_ms > ? and ts_ms <= ?),
+                 r as (select ts_ms, price, avg(price) over (order by ts_ms range between 59999 preceding and current row) twap,
+                              count(*) over (order by ts_ms range between 59999 preceding and current row) n
+                       from c)
+            select g.t, r.ts_ms, r.price, r.twap, r.n from _og g asof left join r on r.ts_ms <= g.t"""
+        out = {}
+        for t, ts, price, twap, n in self.con.execute(q, [asset, _dates(lo, hi), lo, hi]).fetchall():
+            fresh = ts is not None and t - ts <= STALE_MS
+            out[t] = (price if fresh else None, twap if fresh and n >= 45 else None)
+        return out
+
     # ---------- chart helpers ----------
     def market_ticks(self, condition_id: str) -> list[dict]:
         m = self.market(condition_id)

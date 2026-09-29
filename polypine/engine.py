@@ -29,7 +29,7 @@ from .datafeed import BAR_SECONDS, Feed
 os.environ.setdefault("PYNE_SAVE_SCRIPT_TOML", "0")
 
 EXTRA_FIELDS = ("up_bid", "up_ask", "down_bid", "down_ask", "secs_left", "secs_in", "price_to_beat",
-                "window_start")
+                "window_start", "oracle_price", "oracle_twap60")
 
 
 @dataclass
@@ -84,18 +84,34 @@ def fee(shares: float, price: float, rate: float, exponent: float = 1.0) -> floa
     return round(shares * rate * (price * (1 - price)) ** exponent, 5)
 
 
+DEPTH_TICKS = 5  # the recorded depth covers the 5c above the best ask; with a 1c tick that's 5 levels
+
+
 def fill_buy(stake: float, ask: float, ask_size: float | None, depth_5c: float | None,
              tick: float) -> list[tuple[float, float]]:
     """Buy `stake` USDC of shares. Returns the fills as [(shares, price), ...].
 
-    The recorded book gives the best level size and the total within 5c; the part beyond the best level is
-    filled one tick worse, and anything beyond the 5c depth is left unfilled."""
-    want = stake / ask
-    lvl1 = want if ask_size is None else min(want, ask_size)
-    rest_cap = 0.0 if ask_size is None or depth_5c is None else max(depth_5c - ask_size, 0.0)
-    worse = min(ask + tick, 0.99)
-    lvl2 = min((stake - lvl1 * ask) / worse, rest_cap) if want > lvl1 else 0.0
-    return [(q, px) for q, px in ((lvl1, ask), (lvl2, worse)) if q > 0]
+    The 1s book record gives the best level's size and the total resting within 5c. The depth beyond the
+    best level is assumed to be spread evenly over the next DEPTH_TICKS ticks and is walked level by level;
+    anything beyond the 5c depth is left unfilled. (Putting it all one tick worse was far too optimistic for
+    cheap contracts, where a tick is 20-25% of the price.)"""
+    if ask_size is None:
+        return [(stake / ask, ask)]
+    fills = []
+    left = stake
+    take = min(ask_size, left / ask)
+    if take > 0:
+        fills.append((take, ask))
+        left -= take * ask
+    rest = 0.0 if depth_5c is None else max(depth_5c - ask_size, 0.0)
+    for k in range(1, DEPTH_TICKS + 1):
+        px = round(ask + k * tick, 6)
+        if left <= 1e-9 or rest <= 0 or px > 0.99:
+            break
+        take = min(rest / DEPTH_TICKS, left / px)
+        fills.append((take, px))
+        left -= take * px
+    return fills
 
 
 class Simulator:
@@ -202,6 +218,9 @@ def stats(trades: list[Trade], skipped: list[dict]) -> dict:
         "max_drawdown": mdd,
         "pnl_per_trade_t": mean / (sd / math.sqrt(len(pnl))) if sd else None,
         "sold": sum(1 for t in done if t.exit_kind == "sold"), "settled": len(settled),
+        # Robustness: one cheap longshot paying 20x can dominate a short backtest.
+        "largest_win": max(pnl) if pnl else None,
+        "net_pnl_ex_best": (sum(pnl) - max(pnl)) if pnl else None,
     }
 
 
@@ -272,7 +291,9 @@ def build_bars(feed: Feed, cfg: BacktestConfig):
 
     raw = feed.underlying_bars(cfg.asset, cfg.start_ms, cfg.end_ms, cfg.bar)
     bar_ms = BAR_SECONDS[cfg.bar] * 1000
-    quotes = feed.quotes_at(cfg.asset, cfg.tf, [b[0] + bar_ms - 1 for b in raw])
+    closes = [b[0] + bar_ms - 1 for b in raw]
+    quotes = feed.quotes_at(cfg.asset, cfg.tf, closes)
+    oracle = feed.oracle_at(cfg.asset, closes)
     bars = []
     for ts, o, h, l, c, v in raw:
         q = quotes.get(ts + bar_ms - 1)
@@ -285,6 +306,11 @@ def build_bars(feed: Feed, cfg: BacktestConfig):
             ef["secs_left"] = (q["end_ms"] - close_ms) / 1000
             ef["secs_in"] = (close_ms - q["start_ms"]) / 1000
             ef["window_start"] = float(q["start_ms"])
+        price, twap = oracle.get(ts + bar_ms - 1, (None, None))
+        if price is not None:
+            ef["oracle_price"] = float(price)
+        if twap is not None:
+            ef["oracle_twap60"] = float(twap)
         bars.append(OHLCV(ts, o, h, l, c, v, ef))
     return bars
 

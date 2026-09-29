@@ -78,12 +78,20 @@ up_ask: Series[float] = extra_fields["up_ask"]
 | `secs_left`, `secs_in` | seconds until the window ends / since it started |
 | `price_to_beat` | the window's opening reference price (Chainlink for 5m/15m) |
 | `window_start` | window start, ms; changes when a new market begins |
+| `oracle_price` | latest recorded Chainlink price (the 5m/15m settlement oracle); na without Chainlink data |
+| `oracle_twap60` | mean Chainlink price over the last 60s, which 5m/15m settle on at the window end |
+
+**Measure distance with the oracle, not `close`.** `close` is Binance, which can sit several bps from
+Chainlink (4–5 bps on BTC in late September 2026). With a threshold of a few bps, a Binance-based signal
+calls the wrong side and buys 4–10¢ longshots; a few of those paying 20× can make a losing strategy look
+very profitable. See `strategies/late_momentum_oracle.py`, and check "Net excl. best trade" in the results.
 
 How Pine orders turn into contract trades (`polypine/engine.py`):
 
 - `strategy.long` buys the **Up** token and `strategy.short` buys **Down**, in the window live at the fill.
-- Pine fills at the next bar's open. The simulator then waits `--latency-ms` (default 1000) and takes the
-  recorded best ask. Size beyond the best level fills one tick worse, up to the recorded 5¢ depth.
+- Pine fills at the next bar's open. The simulator then waits `--latency-ms` (default 1000) and walks the
+  recorded 1s book: the best level's size at the ask, then the rest of the depth within 5¢, assumed evenly
+  spread over the next five ticks. Anything beyond that depth is left unfilled.
 - If Pine exits before the window ends, the position is sold at the best bid. Otherwise it settles at
   $1/$0 on the oracle outcome.
 - Fees follow [Polymarket's fee page](https://docs.polymarket.com/trading/fees): every taker match pays

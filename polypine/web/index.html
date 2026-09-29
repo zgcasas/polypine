@@ -356,6 +356,8 @@ function renderStats(s) {
     ['Win rate', pct(s.win_rate), ''], ['Avg entry px', num(s.avg_entry_price, 3), ''], ['Edge vs implied', num(s.edge_vs_implied, 4), cls(s.edge_vs_implied)],
     ['Fees', '$' + num(s.fees), 'neg'], ['Max DD', '$' + num(s.max_drawdown), ''], ['t-stat', num(s.pnl_per_trade_t), cls(s.pnl_per_trade_t)],
     ['Settled / sold', `${s.settled} / ${s.sold}`, ''], ['Staked', '$' + num(s.staked, 0), ''], ['Skipped', s.skipped, ''],
+    ['Largest win', '$' + num(s.largest_win), ''], ['Net excl. best trade', '$' + num(s.net_pnl_ex_best), cls(s.net_pnl_ex_best)],
+    ['Win share of best', s.net_pnl > 0 && s.largest_win ? pct(s.largest_win / s.net_pnl) : '–', ''],
   ];
   $('stats').innerHTML = items.map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join('');
 }

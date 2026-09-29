@@ -44,13 +44,26 @@ def test_fee_is_rounded_to_5_decimals_like_polymarket():
     assert fee(0.01, 0.999, 0.07) == 0.0  # below the 0.00001 USDC minimum -> no fee
 
 
-def test_fill_buy_walks_one_tick_beyond_best_level():
+def test_fill_buy_walks_depth_spread_over_five_ticks():
+    # The Sep 29 05:24 case: 4c ask, 352 shares at the best level, 1503 within 5c.
+    fills = fill_buy(100, 0.04, ask_size=352, depth_5c=1503, tick=0.01)
+    assert fills[0] == (352, 0.04)
+    assert [px for _, px in fills] == [0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
+    assert all(q == pytest.approx((1503 - 352) / 5) for q, _ in fills[1:])
+    shares = sum(q for q, _ in fills)
+    cost = sum(q * px for q, px in fills)
+    assert shares == pytest.approx(1503) and cost == pytest.approx(14.08 + 230.2 * 0.35, abs=0.01)  # the book runs out at $94.65
+    # The old model (all extra depth one tick worse) gave ~2044 shares at 4.8c here.
+    assert cost / shares > 0.06
+
+
+def test_fill_buy_stops_when_stake_is_spent():
     fills = fill_buy(100, 0.50, ask_size=100, depth_5c=1000, tick=0.01)
     assert fills[0] == (100, 0.50)
-    assert fills[1][0] == pytest.approx(50 / 0.51) and fills[1][1] == 0.51
-    # Depth caps the fill.
-    fills = fill_buy(100, 0.50, ask_size=10, depth_5c=20, tick=0.01)
-    assert fills == [(10, 0.50), (pytest.approx(10), 0.51)]
+    assert fills[1][1] == 0.51 and fills[1][0] == pytest.approx(50 / 0.51)
+    assert len(fills) == 2
+    # No depth info: everything at the best ask.
+    assert fill_buy(10, 0.25, ask_size=None, depth_5c=None, tick=0.01) == [(40, 0.25)]
 
 
 def test_multi_level_fill_pays_fee_per_level():
@@ -118,6 +131,8 @@ def test_stats_edge_and_roi():
     assert s["trades"] == 2 and s["win_rate"] == 0.5
     assert s["edge_vs_implied"] == pytest.approx(0.5 - 0.60)
     assert s["roi"] == pytest.approx(s["net_pnl"] / 120)
+    assert s["largest_win"] == pytest.approx(max(t.pnl for t in trades))
+    assert s["net_pnl_ex_best"] == pytest.approx(s["net_pnl"] - s["largest_win"])
 
 
 # docs.polymarket.com/trading/fees: taker fee on 100 crypto shares at each price (rounded to cents).
