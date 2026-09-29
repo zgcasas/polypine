@@ -315,7 +315,10 @@ def build_bars(feed: Feed, cfg: BacktestConfig):
     return bars
 
 
-def run_backtest(cfg: BacktestConfig, feed: Feed | None = None, keep_series: bool = True) -> dict:
+def run_backtest(cfg: BacktestConfig, feed: Feed | None = None, keep_series: bool = True,
+                 bars: list | None = None) -> dict:
+    """Run one backtest. `bars` (from build_bars for the same asset/tf/bar/range) can be passed to reuse them
+    across runs that only change script inputs or simulator settings, e.g. a parameter sweep."""
     from pynecore.core.script_runner import ScriptRunner
 
     feed = feed or Feed()
@@ -329,7 +332,8 @@ def run_backtest(cfg: BacktestConfig, feed: Feed | None = None, keep_series: boo
     sys.modules.pop(script.stem, None)
     Path(importlib.util.cache_from_source(str(script.resolve()))).unlink(missing_ok=True)
     importlib.invalidate_caches()
-    bars = build_bars(feed, cfg)
+    if bars is None:
+        bars = build_bars(feed, cfg)
     if not bars:
         raise ValueError(f"no underlying data for {cfg.asset} in the requested range")
 

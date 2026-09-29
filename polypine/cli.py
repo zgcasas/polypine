@@ -97,6 +97,66 @@ def _serve(args) -> None:
     uvicorn.run(create_app(args.data, args.strategies), host=args.host, port=args.port, log_level="warning")
 
 
+def _sweep(args) -> None:
+    from datetime import datetime, timezone
+
+    from .datafeed import Feed
+    from .engine import BacktestConfig
+    from .sweep import _halves, parse_grid, robust, sweep
+
+    def ms(d):
+        return int(datetime.fromisoformat(d).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    def fmt(t):
+        return datetime.fromtimestamp(t / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+    grid = dict(parse_grid(g) for g in args.grid)
+    if args.end:
+        end = ms(args.end)
+    else:  # latest resolved window end
+        feed = Feed(args.data)
+        end = feed.con.execute("select max(end_ms) from markets where asset=? and tf=? and outcome is not null",
+                               [args.asset, args.tf]).fetchone()[0]
+        if end is None:
+            raise SystemExit(f"no resolved {args.asset} {args.tf} markets in {args.data}")
+    start = ms(args.start) if args.start else end - int(args.hours * 3600_000)
+    cfg = BacktestConfig(script=args.script, asset=args.asset, tf=args.tf, bar=args.bar, start_ms=start, end_ms=end,
+                         stake=args.stake, latency_ms=args.latency_ms, min_secs_left=args.min_secs_left)
+    names = list(grid)
+    print(f"sweep {args.script} on {args.asset} {args.tf}, {args.bar} bars, {fmt(start)} -> {fmt(end)} UTC")
+    print("grid: " + "; ".join(f"{n}: {grid[n][0]}..{grid[n][-1]} ({len(grid[n])})" for n in names))
+    rows = sweep(cfg, grid, args.data, args.workers, args.min_trades, args.until_profitable, args.out)
+
+    ok = [r for r in rows if robust(r, args.min_trades)]
+    pos = [r for r in rows if r["net_pnl"] > 0]
+    print(f"\n{len(rows)} combinations run: {len(pos)} with net PnL > 0, {len(ok)} robust "
+          f"(>= {args.min_trades} trades and still > 0 without the best trade)")
+    head = "  ".join(f"{n:>11}" for n in names)
+    print(f"\n{'rank':>4}  {head}  {'trades':>6} {'win':>6} {'avg_px':>6} {'net $':>9} {'roi':>7} {'ex best $':>9}  robust")
+    for i, r in enumerate(rows[:args.top], 1):
+        vals = "  ".join(f"{r[n]:>11}" for n in names)
+        roi = "n/a" if r["roi"] is None else f"{r['roi'] * 100:+.1f}%"
+        win = "n/a" if r["win_rate"] is None else f"{r['win_rate']:.3f}"
+        px = "n/a" if r["avg_entry_price"] is None else f"{r['avg_entry_price']:.3f}"
+        exb = "n/a" if r["net_pnl_ex_best"] is None else f"{r['net_pnl_ex_best']:.2f}"
+        print(f"{i:>4}  {vals}  {r['trades']:>6} {win:>6} {px:>6} {r['net_pnl']:>9.2f} {roi:>7} {exb:>9}  "
+              f"{'yes' if robust(r, args.min_trades) else 'no'}")
+
+    check = ok[:args.check] if ok else rows[:args.check]
+    if check:
+        print(f"\nconsistency check: the same parameters on each half of the period (a real edge should hold in both)")
+        for r in check:
+            inputs = {n: r[n] for n in names}
+            a, b = _halves(args.data, cfg, inputs)
+            pr = lambda s: f"{s['trades']:>3} trades, net {s['net_pnl']:>8.2f}"
+            verdict = "holds in both halves" if a["net_pnl"] > 0 and b["net_pnl"] > 0 else "does NOT hold in both halves"
+            print(f"  {' '.join(f'{n}={v}' for n, v in inputs.items())}: 1st half {pr(a)} | 2nd half {pr(b)} -> {verdict}")
+    if args.out:
+        print(f"\nall results: {args.out}")
+    if not ok:
+        print("\nno robust profitable combination found in this grid and period")
+
+
 def _compact(args) -> None:
     for table in SCHEMAS:
         n = compact(args.data, table)
@@ -162,6 +222,27 @@ def main() -> None:
     bt.add_argument("--roll", action="store_true", help="re-enter each window while Pine stays in position")
     bt.add_argument("--out", help="write full JSON result")
     bt.set_defaults(func=_backtest)
+
+    sw = sub.add_parser("sweep", help="backtest a strategy over a grid of input values")
+    sw.add_argument("script")
+    sw.add_argument("--grid", action="append", required=True,
+                    help="input grid: name=start:stop:step (inclusive) or name=a,b,c; repeat per input")
+    sw.add_argument("--asset", default="BTC", choices=ASSETS)
+    sw.add_argument("--tf", default="5m", choices=TIMEFRAMES)
+    sw.add_argument("--bar", default="1m")
+    sw.add_argument("--start", help="YYYY-MM-DD[THH:MM] UTC; default: --hours before --end")
+    sw.add_argument("--end", help="default: the latest resolved market end in the data")
+    sw.add_argument("--hours", type=float, default=24)
+    sw.add_argument("--stake", type=float, default=100.0)
+    sw.add_argument("--latency-ms", type=int, default=1000)
+    sw.add_argument("--min-secs-left", type=int, default=0)
+    sw.add_argument("--min-trades", type=int, default=20, help="fewer trades than this never counts as profitable")
+    sw.add_argument("--until-profitable", action="store_true", help="stop at the first robust profitable combination")
+    sw.add_argument("--workers", type=int, help="parallel processes (default: CPUs - 1)")
+    sw.add_argument("--top", type=int, default=15, help="rows to print")
+    sw.add_argument("--check", type=int, default=5, help="top robust combinations to re-test on each half")
+    sw.add_argument("--out", help="write every combination's results to this CSV")
+    sw.set_defaults(func=_sweep)
 
     sv = sub.add_parser("serve", help="run the web app")
     sv.add_argument("--host", default="127.0.0.1")

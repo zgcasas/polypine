@@ -47,7 +47,9 @@ SCHEMAS: dict[str, pa.Schema] = {
     ]),
     # Chainlink Data Streams prices (the 5m/15m resolution oracle), ~1 update/s per asset.
     "chainlink_1s": pa.schema([
-        ("ts_ms", pa.int64()), ("asset", pa.string()), ("price", pa.float64()),
+        ("ts_ms", pa.int64()),    # observation time (Chainlink report timestamp)
+        ("asset", pa.string()), ("price", pa.float64()),
+        ("recv_ms", pa.int64()),  # when we received it: typically 1-2s after ts_ms
     ]),
     "underlying_1s": pa.schema([
         ("ts_ms", pa.int64()), ("asset", pa.string()),

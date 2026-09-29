@@ -12,6 +12,9 @@ STALE_MS = 5_000  # a book tick older than this is treated as "no quote"
 # publishes as the previous window's finalPrice). Gamma only exposes it after resolution, so for live
 # windows we compute it from the recorded Chainlink stream.
 PTB_TWAP_MS = 60_000
+# Chainlink prices reach us 1-2s after their timestamp (measured on the VPS: p50 1.4s, p99 2.0s). A backtest
+# may only use a price once it would have arrived: recv_ms where recorded, else ts_ms + this.
+ORACLE_DELAY_MS = 2_000
 
 
 def _dates(start_ms: int, end_ms: int) -> list[str]:
@@ -31,6 +34,10 @@ class Feed:
     def _src(self, table: str) -> str:
         return (f"read_parquet('{self.root}/{table}/**/*.parquet', hive_partitioning=true, "
                 f"union_by_name=true)")
+
+    def _has_col(self, table: str, col: str) -> bool:
+        cols = [r[0] for r in self.con.execute(f"describe select * from {self._src(table)} limit 0").fetchall()]
+        return col in cols
 
     def _has(self, table: str) -> bool:
         d = self.root / table
@@ -164,23 +171,31 @@ class Feed:
 
     # ---------- oracle ----------
     def oracle_at(self, asset: str, times_ms: list[int]) -> dict[int, tuple[float | None, float | None]]:
-        """For each timestamp: (latest Chainlink price at or before t, mean Chainlink price over (t-60s, t]).
+        """For each timestamp t: (latest Chainlink price known at t, mean of the Chainlink prices known at t
+        over the 60s before the latest one). A price is known once it would have arrived (recv_ms, or
+        ts_ms + ORACLE_DELAY_MS for data recorded before arrival times were stored), so there's no lookahead.
         Chainlink is the 5m/15m settlement oracle, and the 60s mean is the quantity those markets settle on
         at the window end. (None, None) where no Chainlink data was recorded (e.g. imported history)."""
         if not times_ms or not self._has("chainlink_1s"):
             return {}
-        lo, hi = min(times_ms) - 60_000, max(times_ms)
+        lo, hi = min(times_ms) - 60_000 - ORACLE_DELAY_MS, max(times_ms)
         self.con.execute("create or replace temp table _og as select unnest(?::bigint[]) as t", [times_ms])
+        # Files recorded before arrival times were stored have no recv_ms column at all.
+        avail = (f"coalesce(recv_ms, ts_ms + {ORACLE_DELAY_MS})" if self._has_col("chainlink_1s", "recv_ms")
+                 else f"ts_ms + {ORACLE_DELAY_MS}")
         q = f"""
-            with c as (select distinct on (ts_ms) ts_ms, price from {self._src('chainlink_1s')}
-                       where asset = ? and date in (select unnest(?::date[])) and ts_ms > ? and ts_ms <= ?),
+            with c as (select distinct on (ts_ms) ts_ms, price,
+                              {avail} as avail_ms
+                       from (select * from {self._src('chainlink_1s')} where asset = ?
+                             and date in (select unnest(?::date[])) and ts_ms > ? and ts_ms <= ?)),
                  r as (select ts_ms, price, avg(price) over (order by ts_ms range between 59999 preceding and current row) twap,
-                              count(*) over (order by ts_ms range between 59999 preceding and current row) n
+                              count(*) over (order by ts_ms range between 59999 preceding and current row) n,
+                              max(avail_ms) over (order by ts_ms rows between unbounded preceding and current row) avail_ms
                        from c)
-            select g.t, r.ts_ms, r.price, r.twap, r.n from _og g asof left join r on r.ts_ms <= g.t"""
+            select g.t, r.avail_ms, r.price, r.twap, r.n from _og g asof left join r on r.avail_ms <= g.t"""
         out = {}
         for t, ts, price, twap, n in self.con.execute(q, [asset, _dates(lo, hi), lo, hi]).fetchall():
-            fresh = ts is not None and t - ts <= STALE_MS
+            fresh = ts is not None and t - ts <= STALE_MS  # ts = when it became known
             out[t] = (price if fresh else None, twap if fresh and n >= 45 else None)
         return out
 

@@ -81,6 +81,9 @@ up_ask: Series[float] = extra_fields["up_ask"]
 | `oracle_price` | latest recorded Chainlink price (the 5m/15m settlement oracle); na without Chainlink data |
 | `oracle_twap60` | mean Chainlink price over the last 60s, which 5m/15m settle on at the window end |
 
+Oracle fields only use prices that had **arrived** by the bar close. Chainlink messages reach us 1–2s after
+their timestamp (p99 2.0s), so the collector records `recv_ms`; older data assumes timestamp + 2s.
+
 **Measure distance with the oracle, not `close`.** `close` is Binance, which can sit several bps from
 Chainlink (4–5 bps on BTC in late September 2026). With a threshold of a few bps, a Binance-based signal
 calls the wrong side and buys 4–10¢ longshots; a few of those paying 20× can make a losing strategy look
@@ -102,6 +105,26 @@ How Pine orders turn into contract trades (`polypine/engine.py`):
 - `--roll`: while Pine stays in position, re-enter every new window. `--min-secs-left` skips late entries.
 - Stats: net PnL after fees, ROI on stake, win rate, `edge_vs_implied` (settled payout minus price paid),
   max drawdown, and the t-stat of per-trade PnL.
+
+## Parameter sweeps
+
+```bash
+scripts/sweep_late_momentum.sh                     # late_momentum over window_secs 200..30, min_bps 0..10,
+                                                   # max_price 0.50..0.96 on the latest 24h of BTC 5m
+scripts/sweep_late_momentum.sh --until-profitable  # stop at the first robust profitable combination
+uv run polypine sweep strategies/ema_cross.py --grid fast=3:15:1 --grid slow=10:60:5 --hours 48
+```
+
+Bars are built once and every combination runs in parallel (the late_momentum grid is 4,752 runs, about 3
+minutes on 12 cores). A combination counts as **robust** only with at least `--min-trades` trades (default
+20) and a positive net PnL *without its best trade*. The top robust results are then re-run on each half of
+the period. All rows go to `sweeps/*.csv`.
+
+Read the results with suspicion. Searching thousands of combinations on one day always finds some that
+worked. On Sep 28–29 the best late_momentum combination (+16.5%) lost 8% on the hours just before the sweep
+window, and a fair-market simulation gives it a 9% chance on its own, before accounting for the search. Check
+anything promising on data the sweep never saw. With 1m bars `window_secs` only matters in 60s steps (the
+script sees secs_left at bar closes); use `--bar 5s` for finer control.
 
 ## What the data says (sanity checks, Apr 6–13 2026, 5m)
 

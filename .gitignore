@@ -7,3 +7,4 @@ logs/
 
 # PyneCore per-script settings; inputs come from the script defaults + per-run overrides instead
 strategies/*.toml
+sweeps/

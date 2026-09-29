@@ -232,7 +232,7 @@ class Collector:
                             asset = by_symbol.get(p.get("symbol"))
                             if asset and msg.get("topic") == "crypto_prices_chainlink" and p.get("value") is not None:
                                 self.sink.write("chainlink_1s", {"ts_ms": int(p["timestamp"]), "asset": asset,
-                                                                 "price": float(p["value"])})
+                                                                 "price": float(p["value"]), "recv_ms": now_ms()})
                                 self.stats["chainlink"] = self.stats.get("chainlink", 0) + 1
                     finally:
                         pinger.cancel()
